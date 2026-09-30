@@ -1,0 +1,10 @@
+# Ultralytics is pinned so local runs and Kaggle runs train identically.
+# torch/torchvision are left unpinned: Kaggle ships its own CUDA build.
+ultralytics==8.4.169
+numpy>=2.0
+pillow>=11.0
+pyyaml>=6.0
+scipy>=1.14
+pandas>=2.2
+matplotlib>=3.9
+streamlit>=1.40

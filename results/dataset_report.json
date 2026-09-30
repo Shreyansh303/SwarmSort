@@ -1,0 +1,216 @@
+{
+  "generated_at": "2026-09-30T18:15:20+00:00",
+  "dataset_root": "GARBAGE CLASSIFICATION",
+  "class_names": [
+    "BIODEGRADABLE",
+    "CARDBOARD",
+    "GLASS",
+    "METAL",
+    "PAPER",
+    "PLASTIC"
+  ],
+  "split_used": "split file split.csv",
+  "splits": {
+    "train": {
+      "images": 7324,
+      "missing_labels": 0,
+      "background_images": 0,
+      "boxes": 51756,
+      "boxes_per_class": {
+        "BIODEGRADABLE": 32049,
+        "CARDBOARD": 3239,
+        "GLASS": 5509,
+        "METAL": 3786,
+        "PAPER": 2905,
+        "PLASTIC": 4268
+      },
+      "images_per_class": {
+        "BIODEGRADABLE": 1605,
+        "CARDBOARD": 1059,
+        "GLASS": 1878,
+        "METAL": 1330,
+        "PAPER": 1232,
+        "PLASTIC": 1022
+      },
+      "image_sizes": {
+        "416x416": 7324
+      },
+      "corrupt_images": [],
+      "label_issues": {
+        "zero_size_boxes": 14
+      },
+      "filename_class_mismatch": 33
+    },
+    "valid": {
+      "images": 2094,
+      "missing_labels": 0,
+      "background_images": 0,
+      "boxes": 14904,
+      "boxes_per_class": {
+        "BIODEGRADABLE": 8815,
+        "CARDBOARD": 1065,
+        "GLASS": 1478,
+        "METAL": 1467,
+        "PAPER": 955,
+        "PLASTIC": 1124
+      },
+      "images_per_class": {
+        "BIODEGRADABLE": 452,
+        "CARDBOARD": 293,
+        "GLASS": 538,
+        "METAL": 383,
+        "PAPER": 355,
+        "PLASTIC": 304
+      },
+      "image_sizes": {
+        "416x416": 2094
+      },
+      "corrupt_images": [],
+      "label_issues": {
+        "zero_size_boxes": 1
+      },
+      "filename_class_mismatch": 4
+    },
+    "test": {
+      "images": 1046,
+      "missing_labels": 0,
+      "background_images": 0,
+      "boxes": 7413,
+      "boxes_per_class": {
+        "BIODEGRADABLE": 4531,
+        "CARDBOARD": 392,
+        "GLASS": 822,
+        "METAL": 588,
+        "PAPER": 527,
+        "PLASTIC": 553
+      },
+      "images_per_class": {
+        "BIODEGRADABLE": 230,
+        "CARDBOARD": 150,
+        "GLASS": 268,
+        "METAL": 185,
+        "PAPER": 181,
+        "PLASTIC": 138
+      },
+      "image_sizes": {
+        "416x416": 1046
+      },
+      "corrupt_images": [],
+      "label_issues": {
+        "zero_size_boxes": 2
+      },
+      "filename_class_mismatch": 2
+    }
+  },
+  "orphan_labels_by_folder": {
+    "train": 0,
+    "valid": 0,
+    "test": 0
+  },
+  "provided_split_boxes_per_class": {
+    "train": {
+      "BIODEGRADABLE": 31714,
+      "CARDBOARD": 3385,
+      "GLASS": 5429,
+      "METAL": 3948,
+      "PAPER": 2979,
+      "PLASTIC": 4146
+    },
+    "valid": {
+      "BIODEGRADABLE": 13632,
+      "CARDBOARD": 1291,
+      "GLASS": 2380,
+      "METAL": 1360,
+      "PAPER": 33,
+      "PLASTIC": 214
+    },
+    "test": {
+      "BIODEGRADABLE": 49,
+      "CARDBOARD": 20,
+      "GLASS": 0,
+      "METAL": 533,
+      "PAPER": 1375,
+      "PLASTIC": 1585
+    }
+  },
+  "box_stats": {
+    "total_boxes": 74073,
+    "degenerate_frac": 0.0189,
+    "area_quantiles": {
+      "5": 0.0013,
+      "25": 0.0055,
+      "50": 0.0199,
+      "75": 0.0882,
+      "95": 0.5476
+    },
+    "tiny_frac_under_1pct_area": 0.3645
+  },
+  "duplicates": {
+    "groups": 47,
+    "images_in_groups": 133,
+    "matched_pairs": {
+      "identical_md5": 0,
+      "same_stem": 0,
+      "dhash_le_10_bits": 43,
+      "dhash_le_40_bits_and_thumb_corr_ge_0.9": 95
+    },
+    "near_duplicate_pairs": 138,
+    "near_duplicate_sheet": "near_duplicate_pairs.jpg"
+  },
+  "filename_class_mismatch": 39,
+  "leakage": {
+    "by_pair": {
+      "train-valid": {
+        "md5": 0,
+        "stem": 0,
+        "near_dup": 0
+      },
+      "train-test": {
+        "md5": 0,
+        "stem": 0,
+        "near_dup": 0
+      },
+      "valid-test": {
+        "md5": 0,
+        "stem": 0,
+        "near_dup": 0
+      }
+    },
+    "eval_leak_frac": 0.0,
+    "excluded": {
+      "train": [],
+      "valid": []
+    }
+  },
+  "checks": {
+    "label_pairing": {
+      "status": "pass",
+      "detail": "0 images without a label file; 0 label files without an image in the dataset folders"
+    },
+    "label_format": {
+      "status": "pass",
+      "detail": "fatal label issues none, corrupt images 0; warning: 17 zero-size boxes ignored - YOLO drops them in training",
+      "warning": "17 zero-size boxes ignored - YOLO drops them in training"
+    },
+    "split_leakage": {
+      "status": "pass",
+      "detail": "0.00% of valid+test images duplicated in another split; excluded 0 train and 0 valid images"
+    },
+    "degenerate_boxes": {
+      "status": "pass",
+      "detail": "1.89% of boxes cover more than 90% of the image"
+    },
+    "class_balance": {
+      "status": "pass",
+      "detail": "smallest train class has 2905 boxes; every class has >= 30 boxes in valid and test"
+    },
+    "ultralytics_loader": {
+      "status": "pass",
+      "detail": "loader accepted {'train': 7324, 'valid': 2094, 'test': 1046}"
+    },
+    "visual_check": {
+      "status": "manual",
+      "detail": "inspect 15 grids in results/plots/label_check"
+    }
+  }
+}

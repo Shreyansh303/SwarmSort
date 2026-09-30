@@ -1,0 +1,30 @@
+# Datasets (download from Kaggle, never commit)
+GARBAGE CLASSIFICATION/
+Garbage_dataset_PlusYaml/
+data/
+
+# Reference material
+*.pdf
+p.html
+p_files/
+
+# Generated per machine by src/verify_dataset.py (absolute paths); configs/split.csv is the portable source
+configs/data.yaml
+configs/lists/
+
+# Training outputs
+runs/
+results/runs*/
+*.pt
+*.onnx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Local tooling
+.claude/
+.env
