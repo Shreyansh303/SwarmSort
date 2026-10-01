@@ -50,3 +50,26 @@ The proxy check tests whether a cheap training ranks hyperparameter settings the
 The log is saved after every finished run, and a restart skips finished runs, so a dropped session loses at most one run. `--smoke` runs a tiny version of the pipeline on CPU and writes to `results/smoke_*.json` instead of the real results.
 
 GPU runs use the Kaggle notebooks in [notebooks/](notebooks/): `phase2a_baseline.ipynb` (about 1 hour) and `phase2b_proxy_check.ipynb` (about 3 hours). Use the same accelerator type for every phase.
+
+## Phase 3: PSO and search
+
+`src/pso.py` is a hand-written particle swarm optimizer (standard inertia-weight PSO, about 70 lines, numpy only). Each particle is one hyperparameter vector in search units (see `src/search_space.py`). It remembers the best position it has visited (pbest), and the swarm remembers the best position any particle has visited (gbest). Each update step is:
+
+```
+v = w*v + c1*r1*(pbest - x) + c2*r2*(gbest - x)
+x = x + v
+```
+
+`r1` and `r2` are uniform random numbers in [0, 1], drawn for every particle and dimension. `c1 = c2 = 1.5`, and the inertia `w` falls linearly from 0.9 to 0.4 over the update steps. Velocities are limited to ±20% of each dimension's range. Positions are clipped to the bounds, and a clipped dimension's velocity is set to zero. Initial positions are uniform in the bounds and initial velocities are uniform in ±10% of the range. A seeded generator makes every run reproducible. The optimizer uses an ask/tell interface: `ask()` returns the positions to evaluate and `tell(fitnesses)` updates pbest/gbest and moves the swarm. With 8 particles and 4 rounds (the random initial swarm plus 3 update steps), the budget is 32 evaluations, the same as random search.
+
+```bash
+.venv/Scripts/python src/pso_benchmark.py                   # Sphere and Rastrigin -> results/plots/pso_benchmarks.png
+.venv/Scripts/python -m unittest discover -s tests -v       # PSO and search tests (no training)
+.venv/Scripts/python src/search.py --method pso --smoke     # tiny CPU pipeline check -> results/smoke_search_pso.json
+```
+
+The benchmark runs the PSO on 6-D Sphere and Rastrigin (20 particles × 50 rounds, 10 seeds) and plots the best value found so far.
+
+`src/search.py` runs one search arm. `--method pso` (seed 42) runs 8 particles × 4 rounds, and `--method random` evaluates 32 uniform samples (seed 123). The fitness of a configuration is the val mAP@50 of one proxy training with exactly the proxy-check settings (40% subset, 12 epochs, imgsz 416). If the proxy check escalated, pass `--proxy-epochs 20`. Every evaluation goes to `results/search_<method>.json`, and the best one to `results/best_<method>.json`, which `src/train_final.py --config` accepts. The log is saved after every evaluation. A restart replays the algorithm from its seed, reuses the logged results and continues with the first missing evaluation. A log made with other settings is refused.
+
+Phase 4 runs both searches on a Kaggle GPU.
