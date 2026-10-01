@@ -35,7 +35,7 @@ SPLIT_FRACS = {"train": 0.70, "valid": 0.20, "test": 0.10}
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 REPO = Path(__file__).resolve().parent.parent
 SPLIT_FILE_NAME = "split.csv"  # lives in the --configs directory
-MAX_ROOT_DEPTH = 4
+MAX_ROOT_DEPTH = 7  # Kaggle mounts datasets as /kaggle/input/datasets/<owner>/<slug>/<folder>/train/...
 
 MIN_TRAIN_BOXES = 400
 MIN_EVAL_BOXES = 30
@@ -98,7 +98,9 @@ def find_root(root):
     if len(found) > 1:
         sys.exit("Several datasets found, pass one of them as --root:\n  " + "\n  ".join(map(str, found)))
     if not found:
-        sys.exit(f"No folder containing {', '.join(s + '/images' for s in SPLITS)} found under {root}")
+        seen = sorted(str(p.relative_to(start)) for p in start.glob("*/*/*") if p.is_dir())[:40]
+        sys.exit(f"No folder containing {', '.join(s + '/images' for s in SPLITS)} found under {root}. "
+                 f"Folders seen (3 levels): {seen or 'none - is the dataset attached as input?'}")
     return found[0]
 
 
