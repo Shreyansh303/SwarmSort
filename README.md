@@ -34,3 +34,19 @@ This reuses `configs/split.csv`, runs the quality checks, and writes:
 On Kaggle, point `--root` at `/kaggle/input` and the dataset folder is found automatically. The split file is read from and written to the `--configs` directory (default `configs/`). If it is missing there, the default run (`--split auto`) stops with an error instead of falling back to the dataset's own folders; use `--split provided` to check those folders on purpose. `--split new` regenerates the file.
 
 `configs/split.csv` is the authoritative split. Near-duplicate detection depends on the Pillow version and its resize filter, so regenerating the split on another machine (such as Kaggle) can group images differently and produce a different split. Always reuse the committed file (the default); do not run `--split new` there.
+
+## Phase 2: baseline and proxy-validity check
+
+Every training uses the images' native size (imgsz 416), explicit SGD, seed 42, deterministic mode, batch 16 and pretrained `yolov8n.pt`. Mosaic closing (`close_mosaic`, 10%) and warmup (`warmup_epochs`, 3%) scale with the number of epochs, so short and long runs follow the same schedule. Two Ultralytics defaults are avoided on purpose: `optimizer=auto` ignores `lr0` and `momentum`, and `fraction` keeps the first N sorted images instead of a random sample.
+
+```bash
+.venv/Scripts/python src/train_final.py   # Arm A: defaults, 100 epochs -> results/baseline.json
+.venv/Scripts/python src/training.py      # stratified 40% train subset -> configs/data_proxy.yaml
+.venv/Scripts/python src/proxy_check.py   # -> results/proxy_check.json
+```
+
+The proxy check tests whether a cheap training ranks hyperparameter settings the same way a longer one does. Seven Latin-hypercube configurations plus the defaults are each trained twice: as a proxy (12 epochs on the 40% subset) and as a medium run (40 epochs on the full train split). The proxy is accepted if the Spearman correlation of their validation mAP@50 is at least 0.6. With 8 points this is a practical check, not a significance test, so the p-value is reported too. If it fails, rerun with `--proxy-epochs 20`; the medium runs are reused.
+
+The log is saved after every finished run, and a restart skips finished runs, so a dropped session loses at most one run. `--smoke` runs a tiny version of the pipeline on CPU and writes to `results/smoke_*.json` instead of the real results.
+
+GPU runs use the Kaggle notebooks in [notebooks/](notebooks/): `phase2a_baseline.ipynb` (about 1 hour) and `phase2b_proxy_check.ipynb` (about 3 hours). Use the same accelerator type for every phase.

@@ -10,6 +10,8 @@ p_files/
 
 # Generated per machine by src/verify_dataset.py (absolute paths); configs/split.csv is the portable source
 configs/data.yaml
+configs/data_proxy.yaml
+results/smoke_*
 configs/lists/
 
 # Training outputs
