@@ -73,3 +73,25 @@ The benchmark runs the PSO on 6-D Sphere and Rastrigin (20 particles × 50 round
 `src/search.py` runs one search arm. `--method pso` (seed 42) runs 8 particles × 4 rounds, and `--method random` evaluates 32 uniform samples (seed 123). The fitness of a configuration is the val mAP@50 of one proxy training with exactly the proxy-check settings (40% subset, 12 epochs, imgsz 416). If the proxy check escalated, pass `--proxy-epochs 20`. Every evaluation goes to `results/search_<method>.json`, and the best one to `results/best_<method>.json`, which `src/train_final.py --config` accepts. The log is saved after every evaluation. A restart replays the algorithm from its seed, reuses the logged results and continues with the first missing evaluation. A log made with other settings is refused.
 
 Phase 4 runs both searches on a Kaggle GPU.
+
+## Phase 4: search runs
+
+Both searches run on Kaggle with the notebooks in [notebooks/](notebooks/), on the same accelerator as Phase 2 (GPU T4 x2), with Internet on and the dataset `viswaprakash1990/garbage-detection` attached:
+
+- `phase4a_pso_search.ipynb`: Arm C, PSO with 8 particles × 4 rounds (about 2-2.5 hours)
+- `phase4b_random_search.ipynb`: Arm B, 32 random samples (about 2-2.5 hours)
+
+Each notebook is 32 proxy trainings with the default 12 proxy epochs, which the proxy check accepted (Spearman rho 0.976). The two notebooks can run at the same time in separate sessions. Start them with **Save Version -> Save & Run All** so they keep running with the browser closed. If a session dies, attach the failed version's output (**Add Input -> Notebook Output**) and run the notebook again: the search continues from the log and loses at most one proxy training.
+
+From each finished version's output, copy these files into the local `results/` folder:
+
+- `results/search_pso.json` and `results/best_pso.json`
+- `results/search_random.json` and `results/best_random.json`
+
+Then plot the convergence of both arms:
+
+```bash
+.venv/Scripts/python src/plot_search.py   # -> results/plots/search_convergence.png and a summary table
+```
+
+The plot shows the best val mAP@50 found so far after each evaluation, with each individual evaluation as a faint marker, dotted lines at the PSO round boundaries, and a dashed line for the Ultralytics defaults trained with the same proxy (from `results/proxy_check.json`).
