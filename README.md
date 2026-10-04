@@ -95,3 +95,31 @@ Then plot the convergence of both arms:
 ```
 
 The plot shows the best val mAP@50 found so far after each evaluation, with each individual evaluation as a faint marker, dotted lines at the PSO round boundaries, and a dashed line for the Ultralytics defaults trained with the same proxy (from `results/proxy_check.json`).
+
+## Phase 5: full training and test evaluation
+
+The winners of the two searches are trained with exactly the Arm A recipe (100 epochs, imgsz 416, batch 16, seed 42, deterministic, SGD) on Kaggle, with the same settings as before (GPU T4 x2, Internet on, dataset `viswaprakash1990/garbage-detection` attached, **Save Version -> Save & Run All**):
+
+- `phase5a_train_arm_b.ipynb`: Arm B, `src/train_final.py --config results/best_random.json --name arm_b --out results/arm_b.json` (about 1.2 hours)
+- `phase5b_train_arm_c.ipynb`: Arm C, `src/train_final.py --config results/best_pso.json --name arm_c --out results/arm_c.json` (about 1.2 hours)
+
+The two notebooks can run at the same time in separate sessions. If a session dies, simply run it again: it is one deterministic training. From each finished version's Output tab, download these files (`X` is `b` or `c`):
+
+- `results/arm_X.json` and `results/arm_X_epochs.csv` -> local `results/`
+- `arm_X_best.pt` (at the top of `/kaggle/working`) -> local `results/runs/arm_X/weights/best.pt`
+
+A `.pt` file downloads as a `.zip`, because a torch checkpoint is itself a zip archive. Rename it to `best.pt`; do not unzip it. Arm A's model is already at `results/runs/baseline/weights/best.pt`.
+
+Then run the final evaluation locally:
+
+```bash
+.venv/Scripts/python src/evaluate.py   # A, B and C on the test split
+```
+
+It first checks each checkpoint (6 classes, 100 epochs, imgsz 416 and the arm's hyperparameters from `results/baseline.json`, `best_random.json` or `best_pso.json`), so a model in the wrong slot is refused. Each model is then validated with Ultralytics' own validator and the same settings as the validation during training (conf 0.001, IoU 0.7, the `max_det` stored in the checkpoint). Speed is the median batch-1 latency over 100 images. It writes:
+
+- `results/test_results.json`: all numbers (metrics, per-class AP, confusion matrices, speed, bootstrap CIs, pairwise differences)
+- `results/test_comparison.md`: the report tables (also printed)
+- `results/plots/test_confusion.png`, `test_per_class.png`, `test_samples.jpg` and `training_curves.png`
+
+The test split is used exactly once, for this final comparison; the searches and all checks only used train and val (`--split val` writes `val_*` files instead; run such trials with a scratch `--out-dir` so `results/` keeps only the final test outputs). Small differences between the arms can be luck in which images ended up in the test split, so a paired bootstrap resamples the test images 1000 times (the same images for every model). It gives a 95% confidence interval for each model and for each difference (B−A, C−A, C−B). If the interval of a difference contains 0, the difference is reported as not significant.
