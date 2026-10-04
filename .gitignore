@@ -18,6 +18,7 @@ configs/lists/
 runs/
 results/runs*/
 *.pt
+!app/models/*.pt
 *.onnx
 
 # Python

@@ -123,3 +123,26 @@ It first checks each checkpoint (6 classes, 100 epochs, imgsz 416 and the arm's 
 - `results/plots/test_confusion.png`, `test_per_class.png`, `test_samples.jpg` and `training_curves.png`
 
 The test split is used exactly once, for this final comparison; the searches and all checks only used train and val (`--split val` writes `val_*` files instead; run such trials with a scratch `--out-dir` so `results/` keeps only the final test outputs). Small differences between the arms can be luck in which images ended up in the test split, so a paired bootstrap resamples the test images 1000 times (the same images for every model). It gives a 95% confidence interval for each model and for each difference (B−A, C−A, C−B). If the interval of a difference contains 0, the difference is reported as not significant.
+
+## Phase 6: demo app
+
+```bash
+.venv/Scripts/python -m streamlit run app/app.py
+```
+
+The Streamlit app opens in the browser. Give it a photo of waste (upload one or more files, take one with the camera, or pick a random test-split image when the local dataset is present). It runs the selected YOLOv8n model at imgsz 416 (a laptop CPU is enough), draws a box and a "CLASS 0.87" label for every item (green boxes for biodegradable items; the dry types use colours that are neither green nor blue, so a box colour is never mistaken for a bin colour), and shows the inference time, a table of the items with their bin and a disposal tip, and how many items go in each bin. The sidebar sets the model, the confidence threshold (default 0.35) and the NMS IoU threshold (default 0.7).
+
+Bin advice follows the colour coding of India's Solid Waste Management Rules 2016 (one dict, `BIN_RULES` in `app/helpers.py`):
+
+| Item | Bin | Disposal tip |
+|---|---|---|
+| BIODEGRADABLE | Green bin (wet / compost) | Compost |
+| PAPER | Blue bin (dry recyclables) | Paper recycling; keep it dry and clean |
+| CARDBOARD | Blue bin (dry recyclables) | Paper recycling; flatten boxes |
+| PLASTIC | Blue bin (dry recyclables) | Plastic recycling; rinse containers |
+| METAL | Blue bin (dry recyclables) | Metal recycling; rinse cans |
+| GLASS | Blue bin (dry recyclables) | Glass recycling; handle with care, keep separate if broken |
+
+The default model is the one with the highest test mAP@50 in `results/test_results.json`, which is A (Ultralytics defaults). The three models are statistically tied on the test split, so the choice makes no measurable difference; B and C can be picked in the sidebar.
+
+The weights in `app/models/` (`arm_a.pt`, `arm_b.pt`, `arm_c.pt`) are byte copies of the three trained models in `results/runs/*/weights/best.pt`, committed so a fresh clone can run the demo; `app/models/README.md` lists their sources and checksums. `tests/test_app.py` tests the bin rules, the image handling and a headless run of the app.
