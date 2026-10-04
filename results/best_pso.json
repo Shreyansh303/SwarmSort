@@ -1,0 +1,28 @@
+{
+  "method": "pso",
+  "source_log": "/kaggle/working/SwarmSort/results/search_pso.json",
+  "index": 26,
+  "label": "r4_p3",
+  "map50": 0.49529,
+  "map50_95": 0.33056,
+  "params": {
+    "lr0": 0.00315345,
+    "lrf": 0.0751247,
+    "momentum": 0.949322,
+    "weight_decay": 0.000259703,
+    "mosaic": 0.271828,
+    "scale": 0.470742
+  },
+  "vector": [
+    -2.501214,
+    0.075125,
+    0.949322,
+    -3.585523,
+    0.271828,
+    0.470742
+  ],
+  "proxy_epochs": 12,
+  "imgsz": 416,
+  "seed": 42,
+  "smoke": false
+}
