@@ -1,0 +1,28 @@
+{
+  "method": "random",
+  "source_log": "/kaggle/working/SwarmSort/results/search_random.json",
+  "index": 1,
+  "label": "s02",
+  "map50": 0.49952,
+  "map50_95": 0.33321,
+  "params": {
+    "lr0": 0.00702571,
+    "lrf": 0.0625491,
+    "momentum": 0.911507,
+    "weight_decay": 0.000602262,
+    "mosaic": 0.51297,
+    "scale": 0.346979
+  },
+  "vector": [
+    -2.15331,
+    0.062549,
+    0.911507,
+    -3.220215,
+    0.51297,
+    0.346979
+  ],
+  "proxy_epochs": 12,
+  "imgsz": 416,
+  "seed": 123,
+  "smoke": false
+}
