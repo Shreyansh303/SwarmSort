@@ -2,16 +2,23 @@
 
     python src/evaluate.py                                # A, B and C on the test split -> results/test_*
     python src/evaluate.py --models A=results/runs/baseline/weights/best.pt --split val   # checks use val only
+    python src/evaluate.py --arms configs/gen2/arms.yaml --data <gen2>/data_test_real_world.yaml --out-dir results/gen2
+
+The arms table says, per label (A, B, C): display name, model path, expected-config JSON ("params"), val-metrics
+JSON, epochs CSV, and the epochs and imgsz the checkpoint must have (if left out, read from the val-metrics JSON).
+Without --arms it is the Generation 1 table (GEN1_ARMS below: 100 epochs at imgsz 416).
 
 Steps:
-  1. Checkpoint check: each best.pt must be a 6-class model trained for 100 epochs at imgsz 416 with its arm's
-     hyperparameters (A: results/baseline.json, B: results/best_random.json, C: results/best_pso.json).
-  2. Metrics: Ultralytics' own validator with the training-time validation settings (imgsz 416, conf 0.001,
+  1. Checkpoint check: each best.pt must have the class names of --data, and its arm's epochs, imgsz and
+     hyperparameters (Gen 1, A: results/baseline.json, B: results/best_random.json, C: results/best_pso.json).
+  2. Metrics: Ultralytics' own validator with the training-time validation settings (the arms' imgsz, conf 0.001,
      iou 0.7, rect batches of 32, max_det from the checkpoint). It also records every image's statistics.
   3. Speed: median batch-1 latency over 100 images of the split (10 warm-up predictions first).
   4. Paired bootstrap: resample the images with replacement (the same images for every model) to get 95% CIs
      of mAP@50 and mAP@50-95 and of every pairwise difference. A difference whose CI contains 0 is not significant.
   5. Outputs: <out-dir>/<split>_results.json, <out-dir>/<split>_comparison.md and <out-dir>/plots/.
+     With a tag they become <split>_<tag>_results.json etc. The tag is --tag, or else the domain of a per-domain
+     test yaml (--data .../data_test_real_world.yaml -> tag real_world).
 
 The test split is meant to be scored exactly once, for the final comparison. Use --split val for any trial run.
 """
@@ -20,6 +27,7 @@ import hashlib
 import json
 import math
 import platform
+import re
 import time
 from datetime import datetime, timezone
 from itertools import combinations
@@ -41,23 +49,30 @@ from training import REPO, write_json  # noqa: E402
 # ---------------------------------------------------------------------------------------------------------------
 # Settings and the three arms
 # ---------------------------------------------------------------------------------------------------------------
-IMGSZ = 416        # native image size, as in every training
-EPOCHS = 100       # full-training length every checkpoint must have
+IMGSZ = 416        # Gen 1 image size, as in every Gen 1 training
+EPOCHS = 100       # Gen 1 full-training length
 VAL_BATCH = 32     # the trainer validates with 2 x batch 16 and rect batches; all images are 416x416 anyway
 SAMPLE_CONF = 0.25  # confidence threshold for drawn boxes and for the latency runs (Ultralytics' predict default)
 LATENCY_IMAGES, LATENCY_WARMUP = 100, 10
 REL_TOL = 1e-6     # tolerance of the hyperparameter comparison
 CONSISTENCY_TOL = 1e-4
 
-ARMS = {
+# The arms table. Paths are relative to the repo (absolute paths also work). config / val_json / epochs_csv may be
+# null; epochs / imgsz may be null to read them from val_json; notebook / download only improve the missing-file
+# message. The default table is Generation 1's.
+ARM_KEYS = ("name", "model", "config", "val_json", "epochs_csv", "epochs", "imgsz", "notebook", "download")
+GEN1_ARMS = {
     "A": {"name": "Defaults", "model": "results/runs/baseline/weights/best.pt", "config": "results/baseline.json",
           "val_json": "results/baseline.json", "epochs_csv": "results/baseline_epochs.csv",
+          "epochs": EPOCHS, "imgsz": IMGSZ,
           "notebook": "notebooks/phase2a_baseline.ipynb", "download": "results/runs/baseline/weights/best.pt"},
     "B": {"name": "Random search", "model": "results/runs/arm_b/weights/best.pt", "config": "results/best_random.json",
           "val_json": "results/arm_b.json", "epochs_csv": "results/arm_b_epochs.csv",
+          "epochs": EPOCHS, "imgsz": IMGSZ,
           "notebook": "notebooks/phase5a_train_arm_b.ipynb", "download": "arm_b_best.pt"},
     "C": {"name": "PSO", "model": "results/runs/arm_c/weights/best.pt", "config": "results/best_pso.json",
           "val_json": "results/arm_c.json", "epochs_csv": "results/arm_c_epochs.csv",
+          "epochs": EPOCHS, "imgsz": IMGSZ,
           "notebook": "notebooks/phase5b_train_arm_c.ipynb", "download": "arm_c_best.pt"},
 }
 
@@ -67,13 +82,13 @@ EXTRA_COLORS = ["#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 CLASS_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 
 
-def display_name(label):
+def display_name(label, arms=GEN1_ARMS):
     """'A' -> 'Defaults', 'B' -> 'Random search', 'C' -> 'PSO'; other labels show as they are."""
-    return ARMS[label]["name"] if label in ARMS else label
+    return arms[label]["name"] if label in arms else label
 
 
-def arm_title(label):
-    return f"{label}: {display_name(label)}" if label in ARMS else label
+def arm_title(label, arms=GEN1_ARMS):
+    return f"{label}: {display_name(label, arms)}" if label in arms else label
 
 
 def model_colors(labels):
@@ -102,25 +117,77 @@ def parse_model_arg(text):
     return label.strip(), Path(path.strip())
 
 
+def load_arms(path):
+    """Read an arms table from a yaml or json file: {"arms": {label: {name, model, config, ...}}}.
+
+    Missing keys become None (name defaults to the label); unknown keys are an error, so a typo is not ignored.
+    """
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}  # yaml also reads json
+    table = data.get("arms") if isinstance(data, dict) else None
+    if not isinstance(table, dict) or not table:
+        raise ValueError(f"{path}: expected a top-level 'arms:' mapping of label -> settings")
+    arms = {}
+    for label, arm in table.items():
+        label = str(label)
+        if not isinstance(arm, dict) or not arm.get("model"):
+            raise ValueError(f"{path}: arm {label} needs at least a 'model' path")
+        unknown = sorted(set(arm) - set(ARM_KEYS))
+        if unknown:
+            raise ValueError(f"{path}: arm {label} has unknown key(s) {unknown}; allowed: {list(ARM_KEYS)}")
+        for key in ("epochs", "imgsz"):
+            if arm.get(key) is not None and not isinstance(arm[key], int):
+                raise ValueError(f"{path}: arm {label}: {key} must be a whole number or left out")
+        arms[label] = {key: arm.get(key) for key in ARM_KEYS}
+        arms[label]["name"] = str(arm.get("name") or label)
+    return arms
+
+
+def output_tag(data, tag=None):
+    """--tag if given, else the domain of a per-domain test yaml (data_test_real_world.yaml -> real_world), else ''."""
+    if tag is not None:
+        return tag
+    match = re.fullmatch(r"data_test_(.+)\.ya?ml", Path(data).name)
+    return match.group(1) if match else ""
+
+
+def output_prefix(split, tag):
+    """Start of every output file name: 'test' (Gen 1) or 'test_real_world' with a tag."""
+    return f"{split}_{tag}" if tag else split
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--models", nargs="+", action="extend", type=parse_model_arg, metavar="LABEL=path",
-                    help="models to compare (default: A, B and C at their results/runs/.../best.pt)")
+                    help="models to compare (default: every arm of the arms table at its model path)")
+    ap.add_argument("--arms", help="arms table, yaml or json (default: the Generation 1 table; "
+                                   "see configs/gen2/arms.yaml)")
     ap.add_argument("--split", choices=("test", "val"), default="test")
     ap.add_argument("--data", default=str(REPO / "configs" / "data.yaml"))
     ap.add_argument("--out-dir", default=str(REPO / "results"), help="plots go to <out-dir>/plots/")
+    ap.add_argument("--tag", help="added to the output names and the report title (default: the domain of a "
+                                  "data_test_<domain>.yaml, else none)")
     ap.add_argument("--device", help="e.g. 0 or cpu (default: Ultralytics picks)")
     ap.add_argument("--bootstrap", type=int, default=1000, help="number of paired bootstrap resamples")
     ap.add_argument("--seed", type=int, default=0, help="seed of the bootstrap and of the image choices")
     ap.add_argument("--skip-checks", action="store_true", help="skip the checkpoint config check")
     args = ap.parse_args(argv)
-    pairs = args.models or [(label, REPO / arm["model"]) for label, arm in ARMS.items()]
+    if args.arms is None:
+        args.arms_table = GEN1_ARMS
+    else:
+        try:
+            args.arms_table = load_arms(args.arms)
+        except (OSError, ValueError, yaml.YAMLError) as e:
+            ap.error(f"--arms: {e}")
+    pairs = args.models or [(label, REPO / arm["model"]) for label, arm in args.arms_table.items()]
     labels = [label for label, _ in pairs]
     duplicates = sorted({label for label in labels if labels.count(label) > 1})
     if duplicates:
         ap.error(f"--models: label(s) {duplicates} given more than once")
     if args.bootstrap < 1:
         ap.error("--bootstrap must be at least 1")
+    if args.tag is not None and not re.fullmatch(r"[A-Za-z0-9_-]*", args.tag):
+        ap.error("--tag may only use letters, digits, '_' and '-'")
+    args.tag = output_tag(args.data, args.tag)
     args.models = dict(pairs)
     return args
 
@@ -128,12 +195,14 @@ def parse_args(argv=None):
 # ---------------------------------------------------------------------------------------------------------------
 # Checkpoint checks
 # ---------------------------------------------------------------------------------------------------------------
-def missing_model_message(label, path):
+def missing_model_message(label, path, arms=GEN1_ARMS):
     """What to download and where to put it, for a model file that does not exist."""
     msg = f"Model {label} not found: {rel(path)}"
-    arm = ARMS.get(label)
+    arm = arms.get(label)
     if arm is None:
         return msg + " (check the path given with --models)."
+    if not arm.get("notebook") or not arm.get("download"):
+        return msg + " (check the model path in the arms table, or the one given with --models)."
     msg += (f"\n  Download {arm['download']} from the Output tab of the finished Kaggle version of "
             f"{arm['notebook']} and put it at {arm['model']}.")
     if arm["download"].endswith(".pt"):
@@ -142,8 +211,8 @@ def missing_model_message(label, path):
     return msg
 
 
-def require_model_files(models):
-    missing = [missing_model_message(label, path) for label, path in models.items() if not Path(path).is_file()]
+def require_model_files(models, arms=GEN1_ARMS):
+    missing = [missing_model_message(label, path, arms) for label, path in models.items() if not Path(path).is_file()]
     if missing:
         raise SystemExit("\n".join(missing))
 
@@ -172,23 +241,57 @@ def data_class_names(data_yaml):
     return [names[k] for k in sorted(names)] if isinstance(names, dict) else list(names)
 
 
-def expected_params(label):
-    """The 6 hyperparameters arm A/B/C must have been trained with, or None for other labels."""
-    if label not in ARMS:
+def expected_params(label, arms=GEN1_ARMS):
+    """The 6 hyperparameters arm A/B/C must have been trained with, or None for other labels (or no config)."""
+    if label not in arms or not arms[label].get("config"):
         return None
-    cfg = json.loads((REPO / ARMS[label]["config"]).read_text())
+    cfg = json.loads((REPO / arms[label]["config"]).read_text())
     return {k: float(cfg["params"][k]) for k in NAMES}
 
 
-def check_checkpoint(info, class_names, expected=None):
-    """List of problems with one checkpoint (empty = fine). expected: the arm's 6 hyperparameters, or None."""
+def arm_setting(arm, key):
+    """An arm's expected epochs or imgsz: the number in the arms table, else the one recorded in its val_json
+    (the training JSON has "epochs" and "imgsz"), else None (unknown)."""
+    if arm.get(key) is not None:
+        return int(arm[key])
+    path = REPO / arm["val_json"] if arm.get("val_json") else None
+    if path is not None and path.is_file():
+        value = json.loads(path.read_text()).get(key)
+        return None if value is None else int(value)
+    return None
+
+
+def expected_schedule(label, arms=GEN1_ARMS):
+    """(epochs, imgsz) a checkpoint must have. An arm of the table: its own values. Another label: the values that
+    every arm of the table shares (Gen 1: 100 and 416), or None (not checked) where the arms differ."""
+    if label in arms:
+        return arm_setting(arms[label], "epochs"), arm_setting(arms[label], "imgsz")
+    shared = []
+    for key in ("epochs", "imgsz"):
+        values = {arm_setting(arm, key) for arm in arms.values()}
+        shared.append(values.pop() if len(values) == 1 else None)
+    return tuple(shared)
+
+
+def eval_imgsz(labels, arms=GEN1_ARMS):
+    """The one image size every model of this run is validated and timed at: their arms' imgsz (Gen 1: 416)."""
+    sizes = {expected_schedule(label, arms)[1] for label in labels} - {None}
+    if len(sizes) > 1:
+        raise SystemExit(f"The models were trained at different image sizes {sorted(sizes)}; "
+                         f"evaluate them in separate runs.")
+    return sizes.pop() if sizes else IMGSZ
+
+
+def check_checkpoint(info, class_names, expected=None, epochs=EPOCHS, imgsz=IMGSZ):
+    """List of problems with one checkpoint (empty = fine). expected: the arm's 6 hyperparameters, or None.
+    epochs / imgsz: what the checkpoint must have been trained with (None = not checked)."""
     problems = []
     if info["names"] != list(class_names):
         problems.append(f"it has {len(info['names'])} classes {info['names'][:8]}{' ...' * (len(info['names']) > 8)}"
-                        f", but data.yaml has {len(class_names)}: {list(class_names)}")
+                        f", but the --data yaml has {len(class_names)}: {list(class_names)}")
     train_args = info["train_args"]
-    for key, want in (("epochs", EPOCHS), ("imgsz", IMGSZ)):
-        if train_args.get(key) != want:
+    for key, want in (("epochs", epochs), ("imgsz", imgsz)):
+        if want is not None and train_args.get(key) != want:
             problems.append(f"it was trained with {key}={train_args.get(key)}, expected {want}")
     if expected is not None:
         for key in NAMES:
@@ -198,12 +301,16 @@ def check_checkpoint(info, class_names, expected=None):
     return problems
 
 
-def run_checks(models, infos, class_names):
+def run_checks(models, infos, class_names, arms=GEN1_ARMS):
     report = []
     for label, path in models.items():
-        problems = check_checkpoint(infos[label], class_names, expected_params(label))
+        epochs, imgsz = expected_schedule(label, arms)
+        problems = check_checkpoint(infos[label], class_names, expected_params(label, arms), epochs, imgsz)
+        if label in arms:
+            problems += [f"the expected {key} is unknown: give it in the arms table or in the arm's val_json"
+                         for key, value in (("epochs", epochs), ("imgsz", imgsz)) if value is None]
         if problems:
-            source = f" ({ARMS[label]['config']})" if label in ARMS else ""
+            source = f" ({arms[label]['config']})" if label in arms and arms[label].get("config") else ""
             report.append(f"Model {label} ({rel(path)}) failed the checkpoint check{source}:\n    - "
                           + "\n    - ".join(problems))
     if report:
@@ -240,9 +347,9 @@ class RecordingValidator(DetectionValidator):
         self.metrics = RecordingDetMetrics()
 
 
-def validate(path, data, split, max_det, device, run_dir):
+def validate(path, data, split, max_det, device, run_dir, imgsz=IMGSZ):
     """Validate one checkpoint like the trainer's final validation of best.pt; returns the finished validator."""
-    args = dict(model=str(path), data=str(data), split=split, imgsz=IMGSZ, batch=VAL_BATCH, rect=True, iou=0.7,
+    args = dict(model=str(path), data=str(data), split=split, imgsz=imgsz, batch=VAL_BATCH, rect=True, iou=0.7,
                 max_det=max_det, plots=True, project=str(run_dir.parent), name=run_dir.name, exist_ok=True,
                 mode="val", task="detect")
     # conf stays unset, as in training: metrics then use conf 0.001 and the confusion matrix conf 0.25
@@ -363,10 +470,11 @@ def percentile_ci(values, level=95):
 METRICS = (("map50", "mAP@50"), ("map50_95", "mAP@50-95"))
 
 
-def pairwise_differences(samples, observed):
+def pairwise_differences(samples, observed, arms=GEN1_ARMS):
     """For every pair (a, b) in the given order: b - a per metric, with its 95% CI and P(b - a > 0).
 
     samples: {label: (n, 2) bootstrap array}; observed: {label: {"map50": .., "map50_95": ..}} on all images.
+    arms: the arms table, for the display names in the verdicts.
     """
     pairs = []
     for a, b in combinations(list(samples), 2):
@@ -377,14 +485,14 @@ def pairwise_differences(samples, observed):
             row[key] = {"observed_diff": round(observed[b][key] - observed[a][key], 5),
                         "mean_diff": float(d.mean()), "ci95": [lo, hi], "p_gt_0": float((d > 0).mean()),
                         "significant": not (lo <= 0 <= hi)}
-        row["verdict"] = verdict(row)
+        row["verdict"] = verdict(row, arms)
         pairs.append(row)
     return pairs
 
 
-def verdict(row):
+def verdict(row, arms=GEN1_ARMS):
     """Plain-English verdict for one pair; a CI that contains 0 means 'not significant'."""
-    a, b = display_name(row["a"]), display_name(row["b"])
+    a, b = display_name(row["a"], arms), display_name(row["b"], arms)
     parts = []
     for key, name in METRICS:
         r = row[key]
@@ -410,13 +518,13 @@ def choose(items, k, seed):
     return [items[i] for i in sorted(picks)]
 
 
-def measure_latency(model, image_paths, device, run_dir):
+def measure_latency(model, image_paths, device, run_dir, imgsz=IMGSZ):
     """Median batch-1 latency (preprocess + inference + NMS) on in-memory images, after warm-up predictions."""
     import cv2
     import torch
 
     images = [cv2.imread(str(p)) for p in image_paths]
-    kwargs = dict(imgsz=IMGSZ, conf=SAMPLE_CONF, verbose=False, save=False, project=str(run_dir.parent),
+    kwargs = dict(imgsz=imgsz, conf=SAMPLE_CONF, verbose=False, save=False, project=str(run_dir.parent),
                   name=run_dir.name, exist_ok=True)
     if device is not None:
         kwargs["device"] = device
@@ -432,7 +540,7 @@ def measure_latency(model, image_paths, device, run_dir):
         times.append(time.perf_counter() - t0)
     ms = float(np.median(times) * 1000)
     return {"ms_per_img": round(ms, 2), "fps": round(1000 / ms, 1), "images": len(images),
-            "warmup": LATENCY_WARMUP, "batch": 1, "imgsz": IMGSZ, "conf": SAMPLE_CONF}
+            "warmup": LATENCY_WARMUP, "batch": 1, "imgsz": imgsz, "conf": SAMPLE_CONF}
 
 
 def choose_samples(image_classes, class_names, seed):
@@ -461,8 +569,8 @@ def read_ground_truth(image_path, width, height):
     return cls, xyxy
 
 
-def predict_boxes(model, image_path, device):
-    kwargs = dict(imgsz=IMGSZ, conf=SAMPLE_CONF, verbose=False, save=False)
+def predict_boxes(model, image_path, device, imgsz=IMGSZ):
+    kwargs = dict(imgsz=imgsz, conf=SAMPLE_CONF, verbose=False, save=False)
     if device is not None:
         kwargs["device"] = device
     boxes = model.predict(str(image_path), **kwargs)[0].boxes
@@ -479,7 +587,7 @@ def save(fig, out, **kwargs):
     plt.close(fig)
 
 
-def plot_confusion(summaries, split, out):
+def plot_confusion(summaries, split, out, arms=GEN1_ARMS):
     """Normalized confusion matrices side by side (columns = true class, each column sums to 1)."""
     labels = list(summaries)
     fig, axes = plt.subplots(1, len(labels), figsize=(3.9 * len(labels) + 1.6, 5.8), squeeze=False,
@@ -498,13 +606,13 @@ def plot_confusion(summaries, split, out):
         ax.set_xlabel("True", fontsize=8)
         if k == 0:
             ax.set_ylabel("Predicted", fontsize=8)
-        ax.set_title(arm_title(label), fontsize=10)
+        ax.set_title(arm_title(label, arms), fontsize=10)
     fig.colorbar(im, ax=axes[0].tolist(), shrink=0.75)
     fig.suptitle(f"Normalized confusion matrices, {split} split (boxes at conf >= 0.25, IoU 0.45)", fontsize=11)
     save(fig, out, dpi=160, bbox_inches="tight")
 
 
-def plot_per_class(summaries, split, out):
+def plot_per_class(summaries, split, out, arms=GEN1_ARMS):
     """Grouped bar chart of per-class AP@50, one bar colour per model."""
     labels = list(summaries)
     names = list(next(iter(summaries.values()))["per_class"])
@@ -515,7 +623,7 @@ def plot_per_class(summaries, split, out):
     for k, label in enumerate(labels):
         values = [summaries[label]["per_class"][n]["ap50"] or 0.0 for n in names]
         pos = x - 0.4 + width * (k + 0.5)
-        ax.bar(pos, values, width, color=colors[label], edgecolor="white", linewidth=1, label=arm_title(label))
+        ax.bar(pos, values, width, color=colors[label], edgecolor="white", linewidth=1, label=arm_title(label, arms))
         for xi, v in zip(pos, values):
             ax.text(xi, v + 0.01, f"{v:.2f}", ha="center", va="bottom", fontsize=6, color="#333333")
     ax.set_xticks(x, names, fontsize=8)
@@ -566,7 +674,7 @@ def plot_samples(samples, columns, class_names, split, out):
     save(fig, out, dpi=120, pil_kwargs={"quality": 85})
 
 
-def plot_training_curves(sources, out):
+def plot_training_curves(sources, out, arms=GEN1_ARMS):
     """Val mAP@50 per epoch of each arm's full training, from Ultralytics' results.csv files.
 
     sources: {label: csv path}. Missing files are skipped with a note. Returns the labels that were drawn.
@@ -589,7 +697,7 @@ def plot_training_curves(sources, out):
     for label, (epoch, map50) in curves.items():
         best = int(np.argmax(map50))
         ax.plot(epoch, map50, color=colors[label], linewidth=2,
-                label=f"{arm_title(label)} (best {map50[best]:.3f} at epoch {int(epoch[best])})")
+                label=f"{arm_title(label, arms)} (best {map50[best]:.3f} at epoch {int(epoch[best])})")
     ax.set_xlabel("epoch")
     ax.set_ylabel("val mAP@50")
     ax.set_title("Validation mAP@50 per epoch of the full trainings")
@@ -608,15 +716,17 @@ def fmt_ci(value, ci, signed=False):
     return f"{f.format(value)} [{f.format(ci[0])}, {f.format(ci[1])}]"
 
 
-def comparison_markdown(report):
+def comparison_markdown(report, arms=GEN1_ARMS):
     """Report-ready markdown: main table, pairwise differences, per-class AP@50."""
     split, models = report["split"], report["models"]
     n_boot = report["settings"]["bootstrap_resamples"]
-    lines = [f"## Final comparison on the {split} split",
+    imgsz = report["settings"].get("imgsz", IMGSZ)
+    tag = f" ({report['tag']})" if report.get("tag") else ""
+    lines = [f"## Final comparison on the {split} split{tag}",
              "",
              f"{report['images']} images, {report['boxes']} boxes. 95% CIs: percentile, {n_boot} paired bootstrap "
              f"resamples of the images (seed {report['settings']['seed']}). P and R at Ultralytics' max-F1 "
-             f"confidence. ms/img: median batch-1 latency at imgsz {IMGSZ} on {report['device']}.",
+             f"confidence. ms/img: median batch-1 latency at imgsz {imgsz} on {report['device']}.",
              "",
              f"| Arm | val mAP@50 (training) | {split} mAP@50 [95% CI] | {split} mAP@50-95 [95% CI] | P | R | ms/img |",
              "|---|---|---|---|---|---|---|"]
@@ -624,7 +734,7 @@ def comparison_markdown(report):
         val = report["val_metrics"].get(label)
         val_map50 = f"{val['map50']:.3f}" if val else "-"
         boot = m["bootstrap"]
-        lines.append(f"| {arm_title(label)} | {val_map50} "
+        lines.append(f"| {arm_title(label, arms)} | {val_map50} "
                      f"| {fmt_ci(m['metrics']['map50'], boot['map50_ci95'])} "
                      f"| {fmt_ci(m['metrics']['map50_95'], boot['map50_95_ci95'])} "
                      f"| {m['metrics']['precision']:.3f} | {m['metrics']['recall']:.3f} "
@@ -634,7 +744,7 @@ def comparison_markdown(report):
                   "| Pair | Δ mAP@50 [95% CI] | P(Δ>0) | Δ mAP@50-95 [95% CI] | P(Δ>0) | Verdict |",
                   "|---|---|---|---|---|---|"]
         for p in report["pairwise"]:
-            pair = f"{display_name(p['b'])} − {display_name(p['a'])} ({p['b']}−{p['a']})"
+            pair = f"{display_name(p['b'], arms)} − {display_name(p['a'], arms)} ({p['b']}−{p['a']})"
             cells = [f"{fmt_ci(p[k]['observed_diff'], p[k]['ci95'], signed=True)} | {p[k]['p_gt_0']:.2f}"
                      for k, _ in METRICS]
             lines.append(f"| {pair} | {cells[0]} | {cells[1]} | {p['verdict']} |")
@@ -645,7 +755,7 @@ def comparison_markdown(report):
         lines += ["", "(Pairwise differences need at least 2 models.)"]
     names = list(next(iter(models.values()))["per_class"])
     lines += ["", f"### Per-class AP@50 ({split} split)", "",
-              "| Class | " + " | ".join(arm_title(label) for label in models) + " |",
+              "| Class | " + " | ".join(arm_title(label, arms) for label in models) + " |",
               "|---|" + "---|" * len(models)]
     for name in names:
         cells = [models[label]["per_class"].get(name, {}).get("ap50") for label in models]
@@ -653,26 +763,27 @@ def comparison_markdown(report):
     return "\n".join(lines) + "\n"
 
 
-def load_val_metrics(labels):
-    """Each arm's val metrics from its training JSON (results/baseline.json, arm_b.json, arm_c.json), if present."""
+def load_val_metrics(labels, arms=GEN1_ARMS):
+    """Each arm's val metrics from its training JSON (Gen 1: results/baseline.json, arm_b.json, arm_c.json),
+    if present."""
     out = {}
     for label in labels:
-        path = REPO / ARMS[label]["val_json"] if label in ARMS else None
+        path = REPO / arms[label]["val_json"] if label in arms and arms[label].get("val_json") else None
         if path is not None and path.is_file():
             d = json.loads(path.read_text())
             out[label] = {k: d.get(k) for k in ("map50", "map50_95", "precision", "recall")}
-            out[label]["source"] = ARMS[label]["val_json"]
+            out[label]["source"] = arms[label]["val_json"]
     return out
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------------------------------------------
-def score_model(label, path, info, args, run_dir):
+def score_model(label, path, info, args, run_dir, imgsz=IMGSZ):
     """Validate one model, check its recorded per-image stats against Ultralytics' mAP, and summarize it."""
     max_det = int(info["train_args"].get("max_det", 300))
     print(f"\n[{label}] validating {rel(path)} (max_det {max_det}, as in its training)")
-    validator = validate(path, args.data, args.split, max_det, args.device, run_dir)
+    validator = validate(path, args.data, args.split, max_det, args.device, run_dir, imgsz)
     check = consistency_check(stack_stats(validator.metrics.per_image), float(validator.metrics.box.map50),
                               float(validator.metrics.box.map))  # unrounded Ultralytics values
     print(f"[{label}] consistency check: mAP@50 {check['map50_ultralytics']:.6f} (Ultralytics) vs "
@@ -682,9 +793,9 @@ def score_model(label, path, info, args, run_dir):
     if not check["passed"]:
         raise SystemExit(f"Consistency check failed for {label}: the recorded per-image statistics do not "
                          f"reproduce Ultralytics' mAP, so the bootstrap would be wrong.")
-    result = {"name": display_name(label), "path": rel(path), "sha256_12": sha256_12(path), "max_det": max_det,
-              "conf": float(validator.args.conf), "run_dir": rel(run_dir), **summarize_validator(validator),
-              "consistency_check": check}
+    result = {"name": display_name(label, args.arms_table), "path": rel(path), "sha256_12": sha256_12(path),
+              "max_det": max_det, "conf": float(validator.args.conf), "run_dir": rel(run_dir),
+              **summarize_validator(validator), "consistency_check": check}
     return result, validator
 
 
@@ -706,29 +817,35 @@ def main(argv=None):
 
     args = parse_args(argv)
     start = time.time()
-    split, models = args.split, args.models
+    split, models, arms, tag = args.split, args.models, args.arms_table, args.tag
+    prefix = output_prefix(split, tag)  # 'test' in Gen 1; e.g. 'test_real_world' with a tag
+    split_title = f"{split} ({tag})" if tag else split
     out_dir = Path(args.out_dir)
     plots = out_dir / "plots"
     class_names = data_class_names(args.data)
-    print(f"Evaluating {', '.join(f'{label}={rel(p)}' for label, p in models.items())} on the {split} split")
+    print(f"Evaluating {', '.join(f'{label}={rel(p)}' for label, p in models.items())} on the {split_title} split"
+          + (f" (arms table {rel(args.arms)})" if args.arms else ""))
     if split != "test" and out_dir.resolve() == (REPO / "results").resolve():
         print(f"Warning: a --split {split} trial is writing into results/; pass a scratch --out-dir to keep "
               f"results/ for the final test run.")
 
     # 1. checkpoint files and configs, before any long work
-    require_model_files(models)
+    require_model_files(models, arms)
     infos = {label: load_checkpoint_info(path) for label, path in models.items()}
+    imgsz = eval_imgsz(models, arms)
     if args.skip_checks:
         print("Checkpoint config check skipped (--skip-checks)")
     else:
-        run_checks(models, infos, class_names)
-        print("Checkpoint check passed: 6 classes, 100 epochs, imgsz 416 and each arm's hyperparameters")
+        run_checks(models, infos, class_names, arms)
+        schedules = ", ".join(f"{label}: {epochs} epochs at imgsz {size}"
+                              for label, (epochs, size) in ((lb, expected_schedule(lb, arms)) for lb in models))
+        print(f"Checkpoint check passed: {len(class_names)} classes, {schedules}, and each arm's hyperparameters")
 
     # 2. metrics, with every image's statistics
-    run_dirs = {label: (out_dir / "runs" / f"eval_{split}_{label}").resolve() for label in models}
+    run_dirs = {label: (out_dir / "runs" / f"eval_{prefix}_{label}").resolve() for label in models}
     results, per_image, validators = {}, {}, {}
     for label, path in models.items():
-        results[label], validators[label] = score_model(label, path, infos[label], args, run_dirs[label])
+        results[label], validators[label] = score_model(label, path, infos[label], args, run_dirs[label], imgsz)
         per_image[label] = validators[label].metrics.per_image
     image_order, flats = pair_images(per_image)
     first = validators[next(iter(models))]
@@ -740,7 +857,8 @@ def main(argv=None):
     yolo = {label: YOLO(str(path)) for label, path in models.items()}
     latency_images = choose([full_path[name] for name in image_order], LATENCY_IMAGES, args.seed)
     for label in models:
-        results[label]["speed"] = {**measure_latency(yolo[label], latency_images, args.device, run_dirs[label]),
+        results[label]["speed"] = {**measure_latency(yolo[label], latency_images, args.device, run_dirs[label],
+                                                   imgsz),
                                    "device": eval_device}
         print(f"[{label}] {results[label]['metrics']}  latency {results[label]['speed']['ms_per_img']} ms/img "
               f"({results[label]['speed']['fps']} FPS) on {eval_device}")
@@ -751,18 +869,19 @@ def main(argv=None):
     for label, s in samples.items():
         results[label]["bootstrap"] = {"map50_ci95": percentile_ci(s[:, 0]), "map50_95_ci95": percentile_ci(s[:, 1]),
                                        "map50_mean": float(s[:, 0].mean()), "map50_95_mean": float(s[:, 1].mean())}
-    pairwise = pairwise_differences(samples, {label: r["metrics"] for label, r in results.items()}) \
+    pairwise = pairwise_differences(samples, {label: r["metrics"] for label, r in results.items()}, arms) \
         if len(models) >= 2 else []
 
     # 5. figures
-    plot_confusion(results, split, plots / f"{split}_confusion.png")
-    plot_per_class(results, split, plots / f"{split}_per_class.png")
+    plot_confusion(results, split_title, plots / f"{prefix}_confusion.png", arms)
+    plot_per_class(results, split_title, plots / f"{prefix}_per_class.png", arms)
     samples_grid = choose_samples(image_classes, class_names, args.seed)
-    columns = [(arm_title(label), {p: predict_boxes(yolo[label], p, args.device) for _, p in samples_grid})
+    columns = [(arm_title(label, arms), {p: predict_boxes(yolo[label], p, args.device, imgsz) for _, p in samples_grid})
                for label in models]
-    plot_samples(samples_grid, columns, class_names, split, plots / f"{split}_samples.jpg")
-    curves_name = "training_curves.png" if split == "test" else f"{split}_training_curves.png"  # trials keep apart
-    plot_training_curves({label: REPO / arm["epochs_csv"] for label, arm in ARMS.items()}, plots / curves_name)
+    plot_samples(samples_grid, columns, class_names, split_title, plots / f"{prefix}_samples.jpg")
+    curves_name = "training_curves.png" if prefix == "test" else f"{prefix}_training_curves.png"  # trials keep apart
+    plot_training_curves({label: REPO / arm["epochs_csv"] for label, arm in arms.items() if arm.get("epochs_csv")},
+                         plots / curves_name, arms)
 
     # 6. JSON and markdown
     report = {
@@ -771,7 +890,7 @@ def main(argv=None):
         "images": len(image_order),
         "boxes": int(flats[next(iter(models))]["target_cls"].size),
         "boxes_per_class": dict(zip(class_names, first.metrics.nt_per_class.astype(int).tolist())),
-        "settings": {"imgsz": IMGSZ, "batch": VAL_BATCH, "rect": True, "conf": float(first.args.conf), "iou": 0.7,
+        "settings": {"imgsz": imgsz, "batch": VAL_BATCH, "rect": True, "conf": float(first.args.conf), "iou": 0.7,
                      "max_det": {label: r["max_det"] for label, r in results.items()},
                      "precision": {label: inference_precision(v.args) for label, v in validators.items()},
                      "confusion_matrix": "conf 0.25, IoU 0.45 (Ultralytics' validator default)",
@@ -780,7 +899,7 @@ def main(argv=None):
                      "bootstrap_resamples": args.bootstrap, "seed": args.seed, "ci": "95% percentile",
                      "samples_conf": SAMPLE_CONF, "checks_skipped": args.skip_checks},
         "models": results,
-        "val_metrics": load_val_metrics(list(ARMS)),
+        "val_metrics": load_val_metrics(list(arms), arms),
         "pairwise": pairwise,
         "ultralytics": ultralytics.__version__,
         "device": eval_device,
@@ -788,8 +907,12 @@ def main(argv=None):
         "seconds": round(time.time() - start, 1),
         "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    markdown = comparison_markdown(report)
-    out_json, out_md = out_dir / f"{split}_results.json", out_dir / f"{split}_comparison.md"
+    if tag:  # Gen 1 reports have neither key, so they stay exactly as before
+        report["tag"] = tag
+    if args.arms:
+        report["arms"] = rel(args.arms)
+    markdown = comparison_markdown(report, arms)
+    out_json, out_md = out_dir / f"{prefix}_results.json", out_dir / f"{prefix}_comparison.md"
     write_json(out_json, report)
     out_md.write_text(markdown, encoding="utf-8")
     print("\n" + markdown)

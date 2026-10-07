@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import yaml
 from ultralytics.utils.metrics import ap_per_class
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -16,6 +17,7 @@ import evaluate  # noqa: E402
 from search_space import DEFAULTS, NAMES  # noqa: E402
 
 CLASSES = ["BIODEGRADABLE", "CARDBOARD", "GLASS", "METAL", "PAPER", "PLASTIC"]
+CLASSES7 = [*CLASSES, "OTHER"]
 
 
 def fake_stats(n_images=40, seed=0, all_correct=False):
@@ -102,6 +104,30 @@ class TestSummarizeValidator(unittest.TestCase):
             "models": {"A": {**summary, "speed": {"ms_per_img": 1.0},
                              "bootstrap": {"map50_ci95": [0.6, 0.8], "map50_95_ci95": [0.3, 0.4]}}}})
         self.assertIn("| METAL | - |", markdown)
+
+    def test_seven_classes_with_other(self):
+        """A Gen 2 model with the optional OTHER class: every table, matrix and plot takes the 7th class."""
+        box = SimpleNamespace(ap_class_index=np.arange(7), ap50=np.linspace(0.9, 0.3, 7),
+                              ap=np.linspace(0.6, 0.1, 7), map50=0.6, map=0.35, mp=0.7, mr=0.6)
+        fake = SimpleNamespace(names=dict(enumerate(CLASSES7)), metrics=SimpleNamespace(box=box),
+                               confusion_matrix=SimpleNamespace(matrix=np.ones((8, 8))))
+        summary = evaluate.summarize_validator(fake)
+        self.assertEqual(list(summary["per_class"]), CLASSES7)
+        self.assertEqual(summary["per_class"]["OTHER"], {"ap50": 0.3, "ap50_95": 0.1})
+        self.assertEqual(summary["confusion_matrix"]["labels"], [*CLASSES7, "background"])
+        result = {**summary, "speed": {"ms_per_img": 1.0},
+                  "bootstrap": {"map50_ci95": [0.5, 0.7], "map50_95_ci95": [0.3, 0.4]}}
+        markdown = evaluate.comparison_markdown({
+            "split": "val", "images": 1, "boxes": 1, "device": "CPU test", "val_metrics": {}, "pairwise": [],
+            "settings": {"bootstrap_resamples": 1, "seed": 0, "imgsz": 640}, "models": {"A": result}})
+        self.assertIn("| OTHER | 0.300 |", markdown)
+        self.assertIn("latency at imgsz 640", markdown)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "per_class.png"
+            evaluate.plot_per_class({"A": result, "B": result}, "val", out)
+            evaluate.plot_confusion({"A": result}, "val", Path(tmp) / "confusion.png")
+            self.assertEqual(out.read_bytes()[:4], b"\x89PNG")
+            self.assertTrue((Path(tmp) / "confusion.png").is_file())
 
 
 class TestBootstrap(unittest.TestCase):
@@ -219,6 +245,134 @@ class TestCheckpointCheck(unittest.TestCase):
             params = json.loads((evaluate.REPO / "results" / file).read_text())["params"]
             self.assertEqual(evaluate.expected_params(label), {k: float(params[k]) for k in NAMES})
 
+    def test_non_default_epochs_and_imgsz(self):
+        """A Gen 2 checkpoint (60 epochs at 640) passes against a 60/640 config and fails the Gen 1 one."""
+        gen2 = self.info(epochs=60, imgsz=640)
+        self.assertEqual(evaluate.check_checkpoint(gen2, CLASSES, dict(DEFAULTS), epochs=60, imgsz=640), [])
+        problems = evaluate.check_checkpoint(gen2, CLASSES, dict(DEFAULTS))  # Gen 1 defaults: 100 and 416
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(any("imgsz=640, expected 416" in p for p in problems))
+        self.assertEqual(evaluate.check_checkpoint(gen2, CLASSES, None, epochs=None, imgsz=None), [])
+
+    def test_run_checks_with_an_arms_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "arm_a.json"
+            cfg.write_text(json.dumps({"params": dict(DEFAULTS), "epochs": 60, "imgsz": 640}))
+            arms = {"A": {"name": "Defaults", "model": "a.pt", "config": str(cfg), "val_json": str(cfg),
+                          "epochs_csv": None, "epochs": None, "imgsz": None}}
+            self.assertEqual(evaluate.expected_schedule("A", arms), (60, 640))  # read from the arm's JSON
+            self.assertEqual(evaluate.eval_imgsz(["A"], arms), 640)
+            models = {"A": Path("a.pt")}
+            evaluate.run_checks(models, {"A": self.info(epochs=60, imgsz=640, names=CLASSES7)}, CLASSES7, arms)
+            with self.assertRaises(SystemExit) as cm:
+                evaluate.run_checks(models, {"A": self.info(names=CLASSES7)}, CLASSES7, arms)
+            self.assertIn("epochs=100, expected 60", str(cm.exception.code))
+            self.assertIn("imgsz=416, expected 640", str(cm.exception.code))
+            with self.assertRaises(SystemExit) as cm:  # a 6-class checkpoint against a 7-class --data yaml
+                evaluate.run_checks(models, {"A": self.info(epochs=60, imgsz=640)}, CLASSES7, arms)
+            self.assertIn("the --data yaml has 7", str(cm.exception.code))
+            unknown = {"A": {**arms["A"], "val_json": str(Path(tmp) / "not_trained_yet.json")}}
+            with self.assertRaises(SystemExit) as cm:
+                evaluate.run_checks(models, {"A": self.info(epochs=60, imgsz=640)}, CLASSES, unknown)
+            self.assertIn("expected epochs is unknown", str(cm.exception.code))
+
+    def test_schedule_of_other_labels_and_eval_imgsz(self):
+        self.assertEqual(evaluate.expected_schedule("X"), (100, 416))  # Gen 1: what every arm shares
+        self.assertEqual(evaluate.eval_imgsz(["A", "B", "C", "X"]), 416)
+        mixed = {"A": {**evaluate.GEN1_ARMS["A"], "imgsz": 640}, "B": evaluate.GEN1_ARMS["B"]}
+        self.assertEqual(evaluate.expected_schedule("X", mixed), (100, None))
+        with self.assertRaises(SystemExit):
+            evaluate.eval_imgsz(["A", "B"], mixed)
+
+
+class TestArmsConfig(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, name, obj):
+        path = self.dir / name
+        path.write_text(json.dumps(obj) if name.endswith(".json") else yaml.safe_dump(obj))
+        return path
+
+    def parse_error(self, argv):
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            evaluate.parse_args(argv)
+        return err.getvalue()
+
+    def test_default_is_the_gen1_table(self):
+        args = evaluate.parse_args([])
+        self.assertIs(args.arms_table, evaluate.GEN1_ARMS)
+        gen1 = {"A": ("results/baseline.json", "results/baseline.json", "results/baseline_epochs.csv"),
+                "B": ("results/best_random.json", "results/arm_b.json", "results/arm_b_epochs.csv"),
+                "C": ("results/best_pso.json", "results/arm_c.json", "results/arm_c_epochs.csv")}
+        for label, (config, val_json, csv) in gen1.items():
+            arm = evaluate.GEN1_ARMS[label]
+            self.assertEqual((arm["config"], arm["val_json"], arm["epochs_csv"]), (config, val_json, csv))
+            self.assertEqual(evaluate.expected_schedule(label), (100, 416))
+        # the same table written to a file (yaml or json) reads back unchanged
+        for name in ("gen1.yaml", "gen1.json"):
+            self.assertEqual(evaluate.load_arms(self.write(name, {"arms": evaluate.GEN1_ARMS})), evaluate.GEN1_ARMS)
+
+    def test_gen2_template(self):
+        template = evaluate.REPO / "configs" / "gen2" / "arms.yaml"
+        arms = evaluate.load_arms(template)
+        self.assertEqual(list(arms), ["A", "B", "C"])
+        self.assertEqual([arms[x]["name"] for x in "ABC"], ["Defaults", "Random search", "PSO"])
+        for x, cfg in zip("abc", ("arm_a", "best_random", "best_pso")):
+            arm = arms[x.upper()]
+            self.assertEqual(arm["model"], f"results/gen2/runs/arm_{x}/weights/best.pt")
+            self.assertEqual(arm["config"], f"results/gen2/{cfg}.json")
+            self.assertEqual(arm["val_json"], f"results/gen2/arm_{x}.json")
+            self.assertEqual(arm["epochs_csv"], f"results/gen2/arm_{x}_epochs.csv")
+            self.assertIsNone(arm["epochs"])  # read from the arm's JSON after training
+            self.assertIsNone(arm["imgsz"])
+        args = evaluate.parse_args(["--arms", str(template), "--split", "val"])
+        self.assertEqual(args.models["C"], evaluate.REPO / "results/gen2/runs/arm_c/weights/best.pt")
+        self.assertEqual(evaluate.display_name("B", args.arms_table), "Random search")
+
+    def test_minimal_arm_and_custom_names(self):
+        arms = evaluate.load_arms(self.write("a.yaml", {"arms": {"A": {"model": "a.pt", "imgsz": 640},
+                                                                 "G2": {"name": "PSO gen 2", "model": "c.pt"}}}))
+        self.assertEqual(arms["A"]["name"], "A")
+        self.assertIsNone(arms["A"]["config"])
+        self.assertIsNone(evaluate.expected_params("A", arms))  # no config: no hyperparameter comparison
+        self.assertEqual(evaluate.arm_setting(arms["A"], "imgsz"), 640)
+        self.assertIsNone(evaluate.arm_setting(arms["A"], "epochs"))
+        self.assertEqual(evaluate.arm_title("G2", arms), "G2: PSO gen 2")
+        self.assertIn("check the model path in the arms table", evaluate.missing_model_message("A", "a.pt", arms))
+
+    def test_bad_arms_files(self):
+        cases = [({"A": {"model": "a.pt"}}, "top-level 'arms:'"),
+                 ({"arms": {"A": {"name": "x"}}}, "needs at least a 'model'"),
+                 ({"arms": {"A": {"model": "a.pt", "imgsize": 640}}}, "unknown key"),
+                 ({"arms": {"A": {"model": "a.pt", "epochs": "sixty"}}}, "whole number")]
+        for k, (obj, message) in enumerate(cases):
+            self.assertIn(message, self.parse_error(["--arms", str(self.write(f"bad{k}.yaml", obj))]))
+        self.assertIn("--arms", self.parse_error(["--arms", str(self.dir / "missing.yaml")]))
+
+
+class TestTag(unittest.TestCase):
+    def test_tag_from_the_data_yaml(self):
+        self.assertEqual(evaluate.output_tag("gen2/data_test_real_world.yaml"), "real_world")
+        self.assertEqual(evaluate.output_tag("gen2/data_test_studio.yaml"), "studio")
+        self.assertEqual(evaluate.output_tag("configs/data.yaml"), "")
+        self.assertEqual(evaluate.output_tag("gen2/data_test_studio.yaml", "mine"), "mine")  # --tag wins
+        self.assertEqual(evaluate.output_tag("gen2/data_test_studio.yaml", ""), "")  # --tag "" turns it off
+
+    def test_output_names(self):
+        self.assertEqual(evaluate.output_prefix("test", ""), "test")  # Gen 1: test_results.json etc.
+        self.assertEqual(evaluate.output_prefix("test", "real_world"), "test_real_world")
+        self.assertEqual(evaluate.parse_args([]).tag, "")
+        args = evaluate.parse_args(["--data", "x/data_test_real_world.yaml", "--split", "val"])
+        self.assertEqual(evaluate.output_prefix(args.split, args.tag), "val_real_world")
+        self.assertEqual(evaluate.parse_args(["--tag", "studio", "--split", "val"]).tag, "studio")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            evaluate.parse_args(["--tag", "../escape"])
+
 
 class TestReport(unittest.TestCase):
     def setUp(self):
@@ -271,6 +425,15 @@ class TestReport(unittest.TestCase):
         self.assertIn("| B: Random search | - |", three)
         self.assertIn("PSO − Random search (C−B)", three)
         self.assertIn("| PLASTIC | 0.500 | 0.500 | 0.500 |", three)
+        self.assertTrue(three.startswith("## Final comparison on the val split\n"))  # no tag: Gen 1 title
+
+    def test_markdown_with_a_tag_and_an_arms_table(self):
+        report = {**self.fake_report(["A", "B"]), "tag": "real_world"}
+        arms = {"A": {"name": "Gen 2 defaults"}, "B": {"name": "Gen 2 random"}}
+        markdown = evaluate.comparison_markdown(report, arms)
+        self.assertTrue(markdown.startswith("## Final comparison on the val split (real_world)\n"))
+        self.assertIn("| A: Gen 2 defaults |", markdown)
+        self.assertIn("Gen 2 random − Gen 2 defaults (B−A)", markdown)
 
 
 if __name__ == "__main__":

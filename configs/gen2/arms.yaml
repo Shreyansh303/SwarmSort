@@ -1,0 +1,39 @@
+# Generation 2 arms table, read by src/evaluate.py --arms.
+#
+#   python src/evaluate.py --arms configs/gen2/arms.yaml --data <gen2 dir>/data_test_real_world.yaml \
+#       --out-dir results/gen2        # -> results/gen2/test_real_world_results.json, ..._comparison.md, plots/
+#
+# Without --arms, evaluate.py uses the Generation 1 table (results/baseline.json, best_random.json, best_pso.json,
+# 100 epochs at imgsz 416).
+#
+# Fields per arm (paths relative to the project root):
+#   name        display name in tables, plots and verdicts
+#   model       best.pt of the arm's full training
+#   config      JSON with "params": the 6 hyperparameters the checkpoint must have been trained with
+#   val_json    the training JSON: its val metrics go into the report table
+#   epochs_csv  per-epoch results.csv of the full training, for the training-curves plot
+#   epochs      epochs the checkpoint must have; left out = read from val_json ("epochs")
+#   imgsz       image size the checkpoint must have, also used for validation and timing; left out = read from
+#               val_json ("imgsz")
+#   notebook, download   optional: what to download from Kaggle if the model file is missing
+# Class count and names are not set here: they come from the --data yaml (6 classes, or 7 with OTHER).
+
+arms:
+  A:
+    name: Defaults
+    model: results/gen2/runs/arm_a/weights/best.pt
+    config: results/gen2/arm_a.json
+    val_json: results/gen2/arm_a.json
+    epochs_csv: results/gen2/arm_a_epochs.csv
+  B:
+    name: Random search
+    model: results/gen2/runs/arm_b/weights/best.pt
+    config: results/gen2/best_random.json
+    val_json: results/gen2/arm_b.json
+    epochs_csv: results/gen2/arm_b_epochs.csv
+  C:
+    name: PSO
+    model: results/gen2/runs/arm_c/weights/best.pt
+    config: results/gen2/best_pso.json
+    val_json: results/gen2/arm_c.json
+    epochs_csv: results/gen2/arm_c_epochs.csv
