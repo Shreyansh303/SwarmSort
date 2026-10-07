@@ -471,12 +471,371 @@ class SplitTests(BuildTestCase):
         self.assertIn("NOWHERE", str(ctx.exception.code))
 
 
+def make_supervisely(project, images, meta_tags=None):
+    """images: {name: (PIL image, [object dicts])}; writes meta.json and ds0/ann + ds0/img under project."""
+    meta_tags = meta_tags or {"Material": ["glass", "paper", "plastic"], "Object": ["bottle", "cigarettebutt"]}
+    project.mkdir(parents=True, exist_ok=True)
+    (project / "meta.json").write_text(json.dumps({
+        "classes": [{"title": "litter", "shape": "rectangle"}],
+        "tags": [{"name": t, "value_type": "oneof_string", "values": v} for t, v in meta_tags.items()]}))
+    for d in ("ann", "img"):
+        (project / "ds0" / d).mkdir(parents=True, exist_ok=True)
+    for name, (img, objects) in images.items():
+        img.save(project / "ds0" / "img" / name, quality=95)
+        (project / "ds0" / "ann" / f"{name}.json").write_text(json.dumps(
+            {"description": "", "tags": [], "size": {"width": img.size[0], "height": img.size[1]},
+             "objects": objects}))
+
+
+def sly_rect(x0, y0, x1, y1, **tags):
+    return {"classTitle": "litter", "geometryType": "rectangle",
+            "points": {"exterior": [[x0, y0], [x1, y1]], "interior": []},
+            "tags": [{"name": k, "value": v} for k, v in tags.items()]}
+
+
+def sly_source(**kw):
+    return {"name": "hitl", "format": "supervisely", "locate": ["recycling-dataset"], "domain": "real_world",
+            "licence": "CC0", "class_from_tag": "Material", "untagged": "OTHER",
+            "tag_overrides": {"Object": {"cigarettebutt": "OTHER"}},
+            "class_map": {"glass": "GLASS", "paper": "BIO", "plastic": "PLASTIC"}, **kw}
+
+
+def make_labelme(folder, name, img, shapes, image_path=None, embed=False):
+    folder.mkdir(parents=True, exist_ok=True)
+    data = {"version": "4.5.6", "flags": {}, "shapes": shapes, "imagePath": image_path or name,
+            "imageData": None, "imageHeight": img.size[1], "imageWidth": img.size[0]}
+    if embed:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95)
+        data["imageData"] = __import__("base64").b64encode(buf.getvalue()).decode()
+    else:
+        img.save(folder / name, quality=95)
+    (folder / (Path(name).stem + ".json")).write_text(json.dumps(data))
+
+
+def lm_poly(label, points):
+    return {"label": label, "points": points, "group_id": None, "shape_type": "polygon", "flags": {}}
+
+
+def labelme_source(**kw):
+    return {"name": "dwsd", "format": "labelme", "locate": ["dwsd"], "locate_match": "contains", "domain": "india",
+            "licence": "CC BY 4.0", "force_split": "test",
+            "class_map": {"plastic bottles": "PLASTIC", "glass": "GLASS", "cloth": "OTHER"}, **kw}
+
+
+SEVEN = ("BIO", "GLASS", "PLASTIC", "A", "B", "C", "OTHER")
+
+
+class SuperviselyTests(BuildTestCase):
+    def make_project(self):
+        project = self.search / "datasets" / "humansintheloop" / "recycling-dataset" / "Recycling Dataset"
+        images = {
+            "tag.jpg": (noise_image(200, 100, 1), [sly_rect(20, 10, 60, 50, Material="glass", Object="bottle")]),
+            "untagged.jpg": (noise_image(200, 100, 2), [sly_rect(100, 20, 180, 80, Object="bottle")]),
+            "butt.jpg": (noise_image(200, 100, 3), [sly_rect(10, 10, 30, 30, Material="paper",
+                                                             Object="cigarettebutt")]),
+            "poly.jpg": (noise_image(200, 100, 4), [{"classTitle": "litter", "geometryType": "polygon",
+                                                     "points": {"exterior": [[50, 20], [150, 40], [100, 90]],
+                                                                "interior": []},
+                                                     "tags": [{"name": "Material", "value": "plastic"}]}]),
+        }
+        images.update({f"p{i}.jpg": (noise_image(200, 100, 10 + i), [sly_rect(40, 20, 80, 60, Material="paper")])
+                       for i in range(8)})
+        make_supervisely(project, images)
+        return project
+
+    def test_tag_class_untagged_and_override(self):
+        self.make_project()
+        cfg = write_config(self.tmp / "s.yaml", [sly_source()], classes=SEVEN)
+        out = self.tmp / "out"
+        report = quiet_build(cfg, out, search_root=self.search)
+        lab = {n: (out / "labels" / f"hitl__Recycling_Dataset_ds0_{n}.txt").read_text().splitlines()
+               for n in ("tag", "untagged", "butt", "poly")}
+        c, box = yolo_to_xyxy(lab["tag"][0])
+        self.assertEqual(c, 1)  # Material glass -> GLASS
+        for got, want in zip(box, (0.1, 0.1, 0.3, 0.5)):
+            self.assertAlmostEqual(got, want, places=5)
+        self.assertEqual(yolo_to_xyxy(lab["untagged"][0])[0], 6)  # no Material tag -> untagged: OTHER
+        self.assertEqual(yolo_to_xyxy(lab["butt"][0])[0], 6)  # Object override wins over Material paper
+        c, box = yolo_to_xyxy(lab["poly"][0])
+        self.assertEqual(c, 2)
+        for got, want in zip(box, (0.25, 0.2, 0.75, 0.9)):  # polygon -> its bounding box
+            self.assertAlmostEqual(got, want, places=5)
+        s = report["sources"]["hitl"]
+        self.assertEqual(s["images_kept"], 12)
+        self.assertEqual(s["warnings"].get("objects_without_Material_tag"), 1)
+        self.assertTrue(s["location"].endswith("humansintheloop/recycling-dataset"))  # outermost match
+
+    def test_unmapped_tag_value_and_override_typo_are_errors(self):
+        self.make_project()
+        cfg = write_config(self.tmp / "s.yaml", [sly_source(class_map={"glass": "GLASS", "paper": "BIO"})],
+                           classes=SEVEN)
+        with self.assertRaisesRegex(bd.BuildError, "unmapped classes.*plastic"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search)
+        cfg = write_config(self.tmp / "s.yaml", [sly_source(tag_overrides={"Object": {"cigarette": "OTHER"}})],
+                           classes=SEVEN)
+        with self.assertRaisesRegex(bd.BuildError, "cigarette"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search)
+
+    def test_untagged_is_required_with_class_from_tag(self):
+        src = sly_source()
+        del src["untagged"]
+        with self.assertRaisesRegex(bd.BuildError, "untagged"):
+            bd.load_config(write_config(self.tmp / "s.yaml", [src], classes=SEVEN))
+
+
+class LabelmeTests(BuildTestCase):
+    def make_dwsd(self, n=6):
+        folder = self.search / "dwsd-india" / "DSWD" / "images"
+        make_labelme(folder, "a.jpg", noise_image(200, 100, 1),
+                     [lm_poly("Plastic Bottles", [[20, 10], [60, 15], [40, 50]]),
+                      lm_poly("glass", [[100, 20], [180, 20], [180, 80], [100, 80]]),
+                      {"label": "cloth", "points": [[5, 60], [25, 90]], "shape_type": "rectangle"}])
+        for i in range(n):
+            make_labelme(folder, f"b{i}.jpg", noise_image(200, 100, 10 + i),
+                         [lm_poly("glass 2", [[10, 10], [50, 10], [30, 40]])])
+        make_labelme(folder, "embedded.jpg", noise_image(200, 100, 99), [lm_poly("glass", [[0, 0], [100, 50]])],
+                     embed=True)
+        (folder.parent / "classes.json").write_text(json.dumps({"names": ["glass"]}))  # not a Labelme file
+        return folder
+
+    def test_polygons_become_boxes_and_force_split_test(self):
+        self.make_dwsd()
+        self.standard_yolo()
+        cfg = write_config(self.tmp / "s.yaml", [yolo_source(), labelme_source()], classes=SEVEN)
+        out = self.tmp / "out"
+        report = quiet_build(cfg, out, search_root=self.search)
+        lines = sorted((out / "labels" / "dwsd__DSWD_images_a.txt").read_text().splitlines())
+        boxes = sorted(yolo_to_xyxy(line) for line in lines)
+        self.assertEqual([c for c, _ in boxes], [1, 2, 6])  # GLASS, PLASTIC, OTHER: each shape one instance
+        want = {2: (0.1, 0.1, 0.3, 0.5), 1: (0.5, 0.2, 0.9, 0.8), 6: (0.025, 0.6, 0.125, 0.9)}
+        for c, box in boxes:
+            for got, exp in zip(box, want[c]):
+                self.assertAlmostEqual(got, exp, places=5)
+        rows = read_csv(out / "split.csv")
+        dwsd = [r for r in rows if r["source"] == "dwsd"]
+        self.assertEqual(len(dwsd), 8)  # 'glass 2' matches glass; the embedded imageData image is decoded
+        self.assertEqual({r["split"] for r in dwsd}, {"test"})
+        self.assertEqual({r["split"] for r in rows if r["source"] == "studio_src"}, {"train", "valid", "test"})
+        india = sorted(Path(p).name for p in (out / "lists" / "test_india.txt").read_text().splitlines())
+        self.assertEqual(india, sorted(r["file"] for r in dwsd))
+        self.assertTrue((out / "data_test_india.yaml").is_file())
+        self.assertEqual(report["sources"]["dwsd"]["force_split"], "test")
+        self.assertEqual(report["sources"]["dwsd"]["warnings"].get("non_labelme_json_skipped"), 1)
+
+    def test_unknown_label_is_an_error_naming_it(self):
+        folder = self.make_dwsd()
+        make_labelme(folder, "odd.jpg", noise_image(200, 100, 50), [lm_poly("styrofoam", [[1, 1], [9, 9]])])
+        cfg = write_config(self.tmp / "s.yaml", [labelme_source()], classes=SEVEN)
+        with self.assertRaisesRegex(bd.BuildError, "styrofoam"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search)
+
+    def test_unused_spelling_variants_allowed_only_when_asked(self):
+        self.make_dwsd()
+        cmap = {"plastic bottles": "PLASTIC", "glass": "GLASS", "cloth": "OTHER", "aluminum foil": "A"}
+        cfg = write_config(self.tmp / "s.yaml", [labelme_source(class_map=cmap)], classes=SEVEN)
+        with self.assertRaisesRegex(bd.BuildError, "aluminum foil"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search)
+        cfg = write_config(self.tmp / "s.yaml", [labelme_source(class_map=cmap, allow_unused_map_keys=True)],
+                           classes=SEVEN)
+        report = quiet_build(cfg, self.tmp / "out", search_root=self.search)
+        self.assertEqual(report["sources"]["dwsd"]["images_kept"], 8)
+
+
+class SourceOptionTests(BuildTestCase):
+    def make_pinned_yolo(self):
+        """90 train (60 bio, 30 glass), 30 valid (20 plastic, 10 bio), 12 test images, pinned by a split csv."""
+        root = self.search / "YOLO_DS"
+        imgs, pinned = {}, {}
+        plan = [("train", 0)] * 60 + [("train", 1)] * 30 + [("valid", 2)] * 20 + [("valid", 0)] * 10 \
+            + [("test", i % 3) for i in range(12)]
+        for i, (split, cls) in enumerate(plan):
+            imgs[f"{split}/images/img{i:03d}.jpg"] = (noise_image(64, 48, i), f"{cls} 0.5 0.5 0.4 0.3\n")
+            pinned[f"img{i:03d}.jpg"] = split
+        make_yolo(root, ["bio", "glass", "plastic"], imgs)
+        csv_path = self.tmp / "split.csv"
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["split", "file"])
+            w.writerows((s, n) for n, s in pinned.items())
+        return csv_path, pinned
+
+    def test_subsample_counts_stratified_and_test_untouched(self):
+        csv_path, pinned = self.make_pinned_yolo()
+        src = yolo_source(keep_split_csv=str(csv_path), subsample={"train": 30, "valid": 9, "seed": 5})
+        out = self.tmp / "out"
+        report = quiet_build(cfg := write_config(self.tmp / "s.yaml", [src]), out, search_root=self.search)
+        rows = read_csv(out / "split.csv")
+        by = Counter((r["split"], r["dominant_class"]) for r in rows)
+        self.assertEqual(by[("train", "BIO")], 20)  # 60:30 -> 20:10
+        self.assertEqual(by[("train", "GLASS")], 10)
+        self.assertEqual(by[("valid", "PLASTIC")], 6)  # 20:10 -> 6:3
+        self.assertEqual(by[("valid", "BIO")], 3)
+        test = sorted(r["file"] for r in rows if r["split"] == "test")
+        self.assertEqual(test, sorted(f"studio_src__{Path(n).stem}.jpg" for n, s in pinned.items() if s == "test"))
+        for r in rows:  # nothing moves between splits
+            self.assertEqual(r["split"], pinned[r["file"].split("__")[1]])
+        sub = report["sources"]["studio_src"]["subsample"]
+        self.assertEqual((sub["train"]["before"], sub["train"]["after"]), (90, 30))
+        self.assertEqual(sub["valid"]["dominant_class_after"], {"BIO": 3, "PLASTIC": 6})
+        self.assertNotIn("test", sub)
+        # the same seed gives the same sample, another seed another one
+        again = quiet_build(cfg, self.tmp / "out2", search_root=self.search)
+        self.assertEqual((out / "split.csv").read_bytes(), (self.tmp / "out2" / "split.csv").read_bytes())
+        self.assertEqual(again["totals"]["train"]["images"], 30)
+        src["subsample"]["seed"] = 6
+        quiet_build(write_config(self.tmp / "s.yaml", [src]), self.tmp / "out3", search_root=self.search)
+        self.assertNotEqual(sorted(r["file"] for r in read_csv(self.tmp / "out3" / "split.csv")),
+                            sorted(r["file"] for r in rows))
+
+    def test_subsample_config_errors(self):
+        for sub, msg in (({"test": 5}, "never subsampled"), ({"train": 0}, "positive"),
+                         ({"train": 5, "extra": 1}, "extra")):
+            src = yolo_source(keep_split_csv="x.csv", subsample=sub)
+            with self.assertRaisesRegex(bd.BuildError, msg):
+                bd.load_config(write_config(self.tmp / "s.yaml", [src]))
+        with self.assertRaisesRegex(bd.BuildError, "keep_split_csv"):
+            bd.load_config(write_config(self.tmp / "s.yaml", [yolo_source(subsample={"train": 5})]))
+        with self.assertRaisesRegex(bd.BuildError, "force_split"):
+            bd.load_config(write_config(self.tmp / "s.yaml", [yolo_source(force_split="holdout")]))
+
+    def test_drop_and_mask_paints_grey(self):
+        folder = self.search / "COCO_DS"
+        images = [(f"{i}.jpg", noise_image(200, 100, i), (200, 100),
+                   [(1, [20, 10, 40, 30], 0), (2, [120, 40, 60, 50], 0)]) for i in range(10)]
+        make_coco(folder, {1: ("Bottle", "Bottle"), 2: ("Bag", "Bag")}, images)
+        cfg = write_config(self.tmp / "s.yaml", [coco_source(class_map={"Bottle": "GLASS", "Bag": "drop_and_mask"})])
+        out = self.tmp / "out"
+        report = quiet_build(cfg, out, search_root=self.search)
+        a = np.asarray(Image.open(out / "images" / "real_src__0.jpg").convert("RGB")).astype(int)
+        masked = a[50:80, 130:170]  # inside the Bag box (120..180 x 40..90), away from JPEG ringing at its edge
+        self.assertLess(np.abs(masked.mean() - 114), 2)
+        self.assertLess(masked.std(), 3)
+        self.assertGreater(a[12:38, 22:58].std(), 15)  # the kept box is untouched noise
+        lines = (out / "labels" / "real_src__0.txt").read_text().splitlines()
+        self.assertEqual([int(line.split()[0]) for line in lines], [1])
+        s = report["sources"]["real_src"]
+        self.assertEqual(s["annotations_dropped"], {"drop_and_mask:Bag": 10})
+        self.assertEqual(s["warnings"]["masked_regions"], 10)
+
+    def test_drop_and_mask_yolo(self):
+        root = self.search / "YOLO_DS"
+        imgs = {f"train/images/m{i}.jpg": (noise_image(100, 100, i), "0 0.25 0.25 0.3 0.3\n1 0.7 0.7 0.4 0.4\n")
+                for i in range(10)}
+        make_yolo(root, ["bio", "glass", "plastic"], imgs)
+        src = yolo_source(class_map={"bio": "BIO", "glass": "drop_and_mask", "plastic": "PLASTIC"})
+        out = self.tmp / "out"
+        quiet_build(write_config(self.tmp / "s.yaml", [src]), out, search_root=self.search)
+        a = np.asarray(Image.open(out / "images" / "studio_src__m0.jpg").convert("RGB")).astype(int)
+        masked = a[60:80, 60:80]  # inside the glass box (50..90), away from its edge
+        self.assertLess(np.abs(masked.mean() - 114), 2)
+        self.assertLess(masked.std(), 3)
+        self.assertEqual(len((out / "labels" / "studio_src__m0.txt").read_text().splitlines()), 1)
+
+    def test_optional_missing_source_warns_and_required_one_errors(self):
+        self.standard_yolo()
+        missing = labelme_source(locate=["nowhere"], optional=True, kaggle="me/dwsd-india")
+        cfg = write_config(self.tmp / "s.yaml", [yolo_source(), missing], classes=SEVEN)
+        logs = []
+        report = bd.build(cfg, self.tmp / "out", search_root=self.search, log=logs.append)
+        self.assertIn("dwsd", report["skipped_sources"])
+        self.assertTrue(any("optional source 'dwsd'" in w for w in report["warnings"]))
+        self.assertTrue(any("WARNING" in line and "dwsd" in line for line in logs))
+        self.assertEqual(report["sources"]["studio_src"]["images_kept"], 20)
+        summary = []
+        bd.print_summary(report, log=summary.append)
+        self.assertTrue(any("NOT found" in line for line in summary))
+        missing["optional"] = False
+        cfg = write_config(self.tmp / "s.yaml", [yolo_source(), missing], classes=SEVEN)
+        with self.assertRaisesRegex(bd.SourceMissing, "me/dwsd-india"):
+            quiet_build(cfg, self.tmp / "out2", search_root=self.search)
+        taco = coco_source(annotations="annotations.json", locate=["tacotrashdataset"],
+                           kaggle="kneroma/tacotrashdataset")
+        with self.assertRaisesRegex(bd.BuildError, "Attach the Kaggle dataset 'kneroma/tacotrashdataset'"):
+            quiet_build(write_config(self.tmp / "s.yaml", [taco]), self.tmp / "out3", search_root=self.search)
+
+
+class RelocateTests(BuildTestCase):
+    def snapshot(self, folder):
+        return {p.relative_to(folder).as_posix(): (p.stat().st_mtime_ns, p.read_bytes())
+                for p in sorted(folder.rglob("*")) if p.is_file()}
+
+    def test_relocate_rewrites_paths_and_proxy_works(self):
+        self.standard_yolo(n=30)
+        self.standard_coco(n=30)
+        cfg = write_config(self.tmp / "s.yaml", [yolo_source(), coco_source()])
+        quiet_build(cfg, self.tmp / "built", seed=1, search_root=self.search)
+        moved = self.tmp / "kaggle_input" / "nb" / "gen2_data"  # as a later notebook sees it
+        moved.parent.mkdir(parents=True)
+        shutil.move(str(self.tmp / "built"), str(moved))
+        before = self.snapshot(moved)
+        cfg_dir = self.tmp / "working" / "gen2_cfg"
+        summary = bd.relocate(moved, cfg_dir, log=lambda *a: None)
+        self.assertEqual(self.snapshot(moved), before)  # the build folder is only read
+        root = moved.resolve().as_posix()
+        data = yaml.safe_load((cfg_dir / "data.yaml").read_text())
+        self.assertEqual(data["path"], root)
+        self.assertEqual(data["nc"], 3)
+        for key in ("train", "val", "test"):
+            self.assertEqual(Path(data[key]).parent, (cfg_dir / "lists").resolve())
+        for lst in (cfg_dir / "lists").glob("*.txt"):
+            for line in lst.read_text().splitlines():
+                self.assertTrue(line.startswith(root + "/images/"), line)
+                self.assertTrue(Path(line).is_file())
+        self.assertIn("data_test_real_world.yaml", summary["yamls"])
+        test_rw = yaml.safe_load((cfg_dir / "data_test_real_world.yaml").read_text())
+        self.assertEqual(Path(test_rw["test"]), (cfg_dir / "lists" / "test_real_world.txt").resolve())
+        rows = read_csv(cfg_dir / "split.csv")
+        self.assertEqual(len(rows), 60)
+        self.assertTrue(all(r["path"] == f"{root}/images/{r['file']}" for r in rows))
+        stats, n_full, n_sub = training.build_proxy_subset(cfg_dir / "data.yaml", cfg_dir / "data_proxy.yaml",
+                                                           cfg_dir / "lists" / "train_proxy.txt", 0.4, 42,
+                                                           cfg_dir / "split.csv")
+        self.assertEqual(n_sub, round(0.4 * n_full))
+        proxy = yaml.safe_load((cfg_dir / "data_proxy.yaml").read_text())
+        for line in Path(proxy["train"]).read_text().splitlines():
+            self.assertTrue(line.startswith(root + "/images/"))
+        self.assertEqual(self.snapshot(moved), before)
+
+    def test_relocate_refuses_bad_folders(self):
+        self.standard_yolo()
+        built = self.tmp / "built"
+        quiet_build(write_config(self.tmp / "s.yaml", [yolo_source()]), built, search_root=self.search)
+        with self.assertRaisesRegex(bd.BuildError, "outside"):
+            bd.relocate(built, built / "cfg", log=lambda *a: None)
+        with self.assertRaisesRegex(bd.BuildError, "not a finished build"):
+            bd.relocate(self.search, self.tmp / "cfg", log=lambda *a: None)
+
+    def test_relocate_cli(self):
+        self.standard_yolo()
+        built = self.tmp / "built"
+        quiet_build(write_config(self.tmp / "s.yaml", [yolo_source()]), built, search_root=self.search)
+        with contextlib.redirect_stdout(io.StringIO()):
+            summary = bd.main(["--relocate-from", str(built), "--out", str(self.tmp / "cfg")])
+        self.assertEqual(summary["split_rows"], 20)
+        self.assertTrue((self.tmp / "cfg" / "data_test_studio.yaml").is_file())
+
+
 class ConfigFileTests(unittest.TestCase):
     def test_project_sources_yaml_loads(self):
         classes, sources = bd.load_config(bd.REPO / "configs" / "gen2" / "sources.yaml")
-        self.assertEqual(classes, ["BIODEGRADABLE", "CARDBOARD", "GLASS", "METAL", "PAPER", "PLASTIC"])
-        self.assertEqual([s["name"] for s in sources], ["garbage_detection", "plusyaml"])
-        self.assertEqual(sources[0]["keep_split_csv"], "configs/split.csv")
+        self.assertEqual(classes, ["BIODEGRADABLE", "CARDBOARD", "GLASS", "METAL", "PAPER", "PLASTIC", "OTHER"])
+        by = {s["name"]: s for s in sources}
+        self.assertEqual(list(by), ["garbage_detection", "taco", "hitl", "dwsd"])
+        self.assertEqual(by["garbage_detection"]["keep_split_csv"], "configs/split.csv")
+        self.assertEqual(by["garbage_detection"]["subsample"], {"train": 3000, "valid": 900, "seed": 42})
+        self.assertEqual({n: s["domain"] for n, s in by.items()},
+                         {"garbage_detection": "studio", "taco": "real_world", "hitl": "real_world", "dwsd": "india"})
+        self.assertEqual(by["dwsd"]["force_split"], "test")
+        self.assertTrue(by["dwsd"]["optional"])
+        self.assertFalse(any(by[n]["optional"] for n in ("garbage_detection", "taco", "hitl")))
+        self.assertEqual(len(by["taco"]["class_map"]), 60)
+        self.assertEqual(sorted(by["hitl"]["class_map"]), ["aluminum", "celluloseacetate", "glass", "metal", "paper",
+                                                           "plastic", "polystyrene", "rubber", "tetrapak", "textile"])
+        self.assertTrue(all(s["kaggle"] for s in sources))
+        for name, lic in (("taco", "CC BY 4.0"), ("hitl", "CC0"), ("dwsd", "CC BY 4.0"),
+                          ("garbage_detection", "CC BY 4.0")):
+            self.assertTrue(by[name]["licence"].startswith(lic), name)
 
 
 if __name__ == "__main__":

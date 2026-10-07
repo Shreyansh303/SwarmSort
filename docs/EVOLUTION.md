@@ -9,7 +9,7 @@ The full write-up of the finished work is in the [README](../README.md). Ideas t
 | Gen | Dates | Data | Model | Method | Headline result | Status |
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-30 to 2026-10-05 | Kaggle garbage-detection: 10,464 images, 6 classes, mostly single objects on clean backgrounds | YOLOv8n, imgsz 416 | Three arms at equal budget: A defaults, B random search, C PSO | Test mAP@50 A 0.676, B 0.672, C 0.668: a statistical tie | Finished |
-| 2 | from 2026-10-07 | Gen 1 data plus real-world litter photos (TACO selected; more under research) | YOLOv8n (image size to be decided) | The same three arms, rerun on the merged data | None yet | In progress |
+| 2 | from 2026-10-07 | Part of the Gen 1 data plus real-world litter photos (TACO, HITL Recycling); DWSD (Kolkata streets) as a held-out India test set; 7 classes (OTHER added) | YOLOv8n, imgsz 640 | The same three arms, rerun on the merged data | None yet | In progress |
 
 ## How to update this document
 
@@ -117,19 +117,28 @@ The domain gap. The goal of SwarmSort is to help sort real waste, but the Gen 1 
 
 Detect and classify waste in photos of normal environments (streets, parks, homes), not only isolated objects on clean backgrounds, and report studio-style and real-world accuracy separately.
 
-### Data (planned)
+### Data (chosen 2026-10-07)
 
-- Keep the Gen 1 dataset.
-- Add real-world datasets:
-  - **TACO** (Trash Annotations in Context, litter photographed where it was found): selected.
-  - **`Garbage_dataset_PlusYaml`** (already downloaded in the project folder): candidate.
-  - Other datasets: under research (licences to be checked before use).
-- Each source's classes are mapped onto our 6 classes through a class-mapping config.
+The earlier plan listed `Garbage_dataset_PlusYaml` as a candidate. It was dropped on 2026-10-07 (see the decisions log).
+
+| Source | Kaggle input | Format | Licence | Role | Domain |
+|---|---|---|---|---|---|
+| Gen 1 garbage-detection | `viswaprakash1990/garbage-detection` | YOLO | CC BY 4.0 | Train/val/test. Gen 1 split kept; a class-stratified, seeded sample of about 3,000 of 7,324 train and 900 of 2,094 val images; all 1,046 Gen 1 test images stay test | `studio` |
+| TACO, official set (1,500 images, 4,784 boxes) | `kneroma/tacotrashdataset` | COCO | CC BY 4.0 | Train/val/test (70/20/10, duplicate-aware) | `real_world` |
+| HITL Recycling (about 3,200 images, 1 box each) | `humansintheloop/recycling-dataset` | Supervisely JSON, class from the Material tag | CC0 | Train/val/test (70/20/10, duplicate-aware) | `real_world` |
+| DWSD, Dense Waste Segmentation (784 images, Kolkata) | private upload of Mendeley `gr99ny6b8p` | Labelme polygons | CC BY 4.0 | **Test only**: all 784 images form the held-out "India real-world" test set | `india` |
+
+- Classes (7, in index order): BIODEGRADABLE, CARDBOARD, GLASS, METAL, PAPER, PLASTIC, OTHER. Gen 1's six keep their indices; OTHER is a narrow catch-all (cigarettes, unidentified litter, mixed bin bags, textile and rubber, hazardous items, multi-layer blister packs).
+- Every source's classes are mapped in `configs/gen2/sources.yaml`. TACO: all 60 categories map to a class, none is dropped. HITL: Object-tag overrides first (for example cigarette butt → OTHER, food waste → BIODEGRADABLE), then the Material tag; objects without a Material tag (about 8%) become OTHER. DWSD: its 14 classes (cloth → OTHER).
+- Per-domain test sets: `data_test_studio.yaml`, `data_test_real_world.yaml`, `data_test_india.yaml`.
+- Checked on TACO's real `annotations.json`: after mapping, BIODEGRADABLE 8, CARDBOARD 251, GLASS 254, METAL 544, PAPER 246, PLASTIC 2,221 and OTHER 1,260 boxes (4,784 in total), as the research predicted.
 
 ### Method (planned)
 
-- A **multi-source dataset builder**:
-  - a class-mapping config per source;
+- A **multi-source dataset builder** (`src/build_dataset.py`):
+  - readers for YOLO, COCO, Supervisely and Labelme sources, and a class-mapping config per source;
+  - per-source options: force a source into one split (DWSD → test), subsample a pinned source (Gen 1), and drop-and-mask (remove a box and paint its region grey, available but not needed with OTHER);
+  - a relocate mode, so later Kaggle notebooks can use the finished build when it is attached read-only;
   - a stratified, duplicate-aware split across all sources (the Gen 1 duplicate rules extended to the merged data);
   - Gen 1 test images stay in test, so the old test set is never trained on;
   - per-domain test lists, so studio (Gen 1 style) and real-world accuracy are reported separately.
@@ -154,11 +163,17 @@ Detect and classify waste in photos of normal environments (streets, parks, home
 | 2026-10-07 | Data is merged through a multi-source builder: class-mapping config, stratified duplicate-aware split, Gen 1 test images stay test, per-domain test lists. |
 | 2026-10-07 | Model stays YOLOv8n, and all three arms (defaults, random search, PSO) are rerun on the merged data, on Kaggle. |
 | 2026-10-07 | Step 0 (labelling our own phone photos as a real-world test set) is skipped. Held-out real-world dataset images serve as the real-world test set instead. |
+| 2026-10-07 | Final sources: TACO official (`kneroma/tacotrashdataset`) and HITL Recycling (`humansintheloop/recycling-dataset`) for train/val/test, plus the Gen 1 dataset. |
+| 2026-10-07 | DWSD (Mendeley gr99ny6b8p, Kolkata streets and parks) is used only as a held-out "India real-world" test set: all 784 images go to test. It is uploaded to Kaggle as a private dataset. |
+| 2026-10-07 | `Garbage_dataset_PlusYaml` is dropped: mostly studio and web images, Roboflow augmentation copies, train/test leakage and label errors. |
+| 2026-10-07 | An OTHER class is added: 7 classes, BIODEGRADABLE, CARDBOARD, GLASS, METAL, PAPER, PLASTIC, OTHER. Gen 1's six keep their indices. Gen 1 vs Gen 2 comparisons use the six shared classes. |
+| 2026-10-07 | Training image size is 640. The builder stores images with a long side of at most 1280 px. |
+| 2026-10-07 | Gen 1 is subsampled to about 3,000 train and 900 val images (stratified by class, seeded); all 1,046 Gen 1 test images stay test, and Gen 1 split assignments still come from `configs/split.csv`. |
+| 2026-10-07 | Domains: Gen 1 → `studio`; TACO and HITL → `real_world`; DWSD → `india`. Each has its own test list and yaml. |
+| 2026-10-07 | Licences recorded per source: TACO CC BY 4.0, HITL CC0, DWSD CC BY 4.0, Gen 1 CC BY 4.0. |
 
-**To be decided:**
+**To be decided** (the OTHER class and the image size were settled on 2026-10-07, see above):
 
-- Whether to add an OTHER class for litter that fits none of the 6 classes.
-- Image size: 416 (as in Gen 1) or 640 (small items in wide scenes may need it; see [FUTURE_WORK](FUTURE_WORK.md) item 3.2).
 - Whether to re-run the proxy-validity check on the merged data.
 - A stronger model (for example YOLOv8s) later, as Gen 3 ([FUTURE_WORK](FUTURE_WORK.md) item 3.1).
 

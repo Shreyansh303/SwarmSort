@@ -1,49 +1,70 @@
-# Generation 2 dataset sources, read by src/build_dataset.py.
+# Generation 2 dataset sources, read by src/build_dataset.py. Final choice of 2026-10-07 (see docs/EVOLUTION.md).
 #
-#   python src/build_dataset.py --sources configs/gen2/sources.yaml --out <dir> --seed 42
+#   python src/build_dataset.py --sources configs/gen2/sources.yaml --out /kaggle/working/gen2_data \
+#       --search-root /kaggle/input --seed 42 --max-side 1280
 #
-# FIRST DRAFT. The plusyaml and taco class mappings are placeholders until the source research is finished.
+# Kaggle inputs to attach (the builder finds them anywhere under /kaggle/input, up to 7 folder levels deep):
+#   viswaprakash1990/garbage-detection   Gen 1, folder "GARBAGE CLASSIFICATION"
+#   kneroma/tacotrashdataset             TACO, data/annotations.json + data/batch_1..15/
+#   humansintheloop/recycling-dataset    HITL Recycling, Supervisely project (<dataset>/ann + <dataset>/img, meta.json)
+#   <your private DWSD dataset>          DWSD: upload the contents of the Mendeley zip (gr99ny6b8p, DSWD.zip) as a
+#                                        private Kaggle dataset whose name contains "dwsd" (e.g. "dwsd-india").
+#                                        Optional: without it the build goes on, with a loud warning.
 #
 # Top-level fields
-#   classes   target class names, in index order. Add OTHER as a 7th name to enable an "other waste" class;
-#             class_map values may then use OTHER.
+#   classes   target class names, in index order. Gen 1's six keep indices 0-5; OTHER is index 6.
 #   sources   list of datasets to merge, fields below.
 #
 # Source fields
 #   name            short id (letters, digits, _ or -). Prefixes every output file: <name>__<image>.jpg
 #   enabled         false = skipped (its class_map may then be an unfinished placeholder)
-#   format          yolo | coco
+#   format          yolo | coco | supervisely | labelme
 #   locate          folder name(s) searched under --search-root (default: the project root), up to 7 levels deep,
 #                   so Kaggle's /kaggle/input/datasets/<owner>/<slug>/... nesting is found. Names are compared
-#                   ignoring case, spaces, '-' and '_'. Required for yolo; optional for coco (narrows the search).
+#                   ignoring case, spaces, '-' and '_'. Required except for coco (where it narrows the search).
+#                   An absolute path, or a path relative to --search-root, is used as it is.
+#   locate_match    exact (default) | contains: with contains, a folder whose name contains a locate name matches
+#   kaggle          the Kaggle dataset to attach; named in the error message when the source is not found
+#   optional        default false. true: a source that is not found is skipped with a warning instead of an error
 #   names_file      yolo only: the yaml with the class names, relative to the found folder
 #                   (default: data.yaml in the folder or its parent)
 #   annotations     coco only: annotations json file name or relative path (e.g. data/annotations.json)
-#   images_dir      coco only: image folder relative to the json's folder (default: the json's folder);
-#                   each image's file_name is resolved inside it
+#   images_dir      coco only: image folder relative to the json's folder (default: the json's folder)
 #   class_field     coco only: name (default) or supercategory: which category field class_map keys refer to
-#   box_frame       coco only: auto (default) | display | raw. Whether boxes refer to the photo after EXIF
-#                   rotation (display, TACO's convention) or to the stored pixels (raw). auto decides per image
-#                   from the recorded width/height and assumes display when they cannot tell.
-#   class_map       source class name -> target class name | drop_annotation | drop_image.
+#   box_frame       coco/supervisely/labelme: auto (default) | display | raw. Whether boxes refer to the photo after
+#                   EXIF rotation (display) or to the stored pixels (raw); auto decides per image from the recorded
+#                   width/height and assumes display when they cannot tell.
+#   class_from_tag  supervisely only: take the class from this object tag's value (e.g. Material) instead of the
+#                   object's class title. class_map keys are then the tag's values.
+#   tag_overrides   supervisely only: {tag: {value: target}}, checked first, in order (e.g. Object: cigarettebutt)
+#   untagged        supervisely only, needed with class_from_tag: the target of an object without that tag
+#   class_map       source class name -> target class name | drop_annotation | drop_and_mask | drop_image.
 #                     drop_annotation  remove that box, keep the image
+#                     drop_and_mask    remove that box and paint its region mid-grey (114), so the unlabelled
+#                                      object is not learnt as background
 #                     drop_image       remove every image containing that class
-#                   Every source class must be listed; an unmapped or unknown name is an error.
-#   domain          studio | real_world (any short id works): per-domain test lists and data_test_<domain>.yaml
+#                   Every source class must be listed; an unmapped or unknown name is an error. Labelme labels
+#                   are matched ignoring case, spaces and punctuation.
+#   allow_unused_map_keys  default false. true: class_map may list names that do not occur (spelling variants)
+#   domain          per-domain test lists and data_test_<domain>.yaml: studio | real_world | india
 #   licence         recorded in build_report.json
 #   keep_split_csv  optional: a split csv (columns split, file) whose assignment this source keeps, so Gen 1 test
 #                   images stay test. Relative paths are resolved from the project root.
+#   force_split     optional: train | valid | test: every image of the source goes to this split
+#   subsample       optional, with keep_split_csv: {train: N, valid: M, seed: S}: keep a seeded sample of N train
+#                   and M valid images, stratified by dominant class. Test is never subsampled.
 #   max_images      optional: use at most this many images of the source (seeded sample, for quick tests)
 #   keep_empty      optional, default false: keep images that have no boxes as background images.
 #                   Images that lose all their boxes through drop_annotation are always removed.
 
-classes: [BIODEGRADABLE, CARDBOARD, GLASS, METAL, PAPER, PLASTIC]
+classes: [BIODEGRADABLE, CARDBOARD, GLASS, METAL, PAPER, PLASTIC, OTHER]
 
 sources:
-  # Gen 1 dataset (Kaggle viswaprakash1990/garbage-detection), 416x416 studio-style photos.
+  # Gen 1 dataset, 416x416 studio-style photos. Gen 1 split kept; about 3000 of 7324 train and 900 of 2094 valid
+  # images are used (class-stratified, seeded); all 1046 Gen 1 test images stay test.
   - name: garbage_detection
-    enabled: true
     format: yolo
+    kaggle: viswaprakash1990/garbage-detection
     locate: ["GARBAGE CLASSIFICATION", "garbage-detection"]
     class_map:
       BIODEGRADABLE: BIODEGRADABLE
@@ -56,97 +77,162 @@ sources:
     licence: "CC BY 4.0 (Roboflow material-identification/garbage-classification-3 v2)"
     keep_split_csv: configs/split.csv
     keep_empty: true   # Gen 1 kept images whose only boxes were zero-size, so its test set stays identical
+    subsample: {train: 3000, valid: 900, seed: 42}
 
-  # Garbage_dataset_PlusYaml (local folder), 7 classes, YOLO labels (some as polygons, converted to boxes).
-  # PLACEHOLDER MAPPING, pending the source research. In particular: does Organic match BIODEGRADABLE, and
-  # should Electronics / Miscellaneous become OTHER instead of being dropped?
-  - name: plusyaml
-    enabled: true
-    format: yolo
-    locate: ["Garbage_dataset_PlusYaml"]
-    class_map:
-      Paper: PAPER
-      Plastic: PLASTIC
-      Glass: GLASS
-      Metal: METAL
-      Organic: BIODEGRADABLE
-      Electronics: drop_image        # placeholder
-      Miscellaneous: drop_annotation # placeholder
-    domain: studio                   # placeholder: check whether its photos are studio or real-world
-    licence: "unknown - to be confirmed"
-
-  # TACO (COCO format, 60 categories in 28 supercategories, high-resolution phone photos with EXIF orientation).
-  # Disabled until the research fills in the mapping. Typical layouts: annotations.json next to batch_1/ ...
-  # batch_15/ folders (file_name "batch_1/000006.jpg"), or the same inside a data/ folder.
+  # TACO official set (1500 images, 4784 boxes, 60 categories), COCO, high-resolution phone photos of litter.
+  # Kaggle copy kneroma/tacotrashdataset: data/annotations.json with file names like batch_1/000006.jpg.
+  # Mapping: dataset_research section 3a, 7-class column (every category maps to a class; none is dropped).
   - name: taco
-    enabled: false
     format: coco
-    locate: ["TACO", "tacotrashdataset"]
+    kaggle: kneroma/tacotrashdataset
+    locate: ["tacotrashdataset", "TACO"]
     annotations: annotations.json
     class_field: name
     box_frame: auto
     domain: real_world
-    licence: "CC BY 4.0 (TACO, Proenca and Simoes 2020) - to be confirmed for the chosen mirror"
-    class_map: {}
-    # PLACEHOLDER: every TACO category name must be mapped. Check the exact spelling in annotations.json.
-    # class_map:
-    #   Aluminium foil: ?
-    #   Battery: ?
-    #   Aluminium blister pack: ?
-    #   Carded blister pack: ?
-    #   Other plastic bottle: ?
-    #   Clear plastic bottle: ?
-    #   Glass bottle: ?
-    #   Plastic bottle cap: ?
-    #   Metal bottle cap: ?
-    #   Broken glass: ?
-    #   Food Can: ?
-    #   Aerosol: ?
-    #   Drink can: ?
-    #   Toilet tube: ?
-    #   Other carton: ?
-    #   Egg carton: ?
-    #   Drink carton: ?
-    #   Corrugated carton: ?
-    #   Meal carton: ?
-    #   Pizza box: ?
-    #   Paper cup: ?
-    #   Disposable plastic cup: ?
-    #   Foam cup: ?
-    #   Glass cup: ?
-    #   Other plastic cup: ?
-    #   Food waste: ?
-    #   Glass jar: ?
-    #   Plastic lid: ?
-    #   Metal lid: ?
-    #   Other plastic: ?
-    #   Magazine paper: ?
-    #   Tissues: ?
-    #   Wrapping paper: ?
-    #   Normal paper: ?
-    #   Paper bag: ?
-    #   Plastified paper bag: ?
-    #   Plastic film: ?
-    #   Six pack rings: ?
-    #   Garbage bag: ?
-    #   Other plastic wrapper: ?
-    #   Single-use carrier bag: ?
-    #   Polypropylene bag: ?
-    #   Crisp packet: ?
-    #   Spread tub: ?
-    #   Tupperware: ?
-    #   Disposable food container: ?
-    #   Foam food container: ?
-    #   Other plastic container: ?
-    #   Plastic glooves: ?
-    #   Plastic utensils: ?
-    #   Pop tab: ?
-    #   Rope & strings: ?
-    #   Scrap metal: ?
-    #   Shoe: ?
-    #   Squeezable tube: ?
-    #   Plastic straw: ?
-    #   Paper straw: ?
-    #   Styrofoam piece: ?
-    #   Unlabeled litter: ?
-    #   Cigarette: ?
+    licence: "CC BY 4.0 (TACO, Proenca and Simoes 2020, Zenodo 10.5281/zenodo.3587843)"
+    class_map:
+      Aluminium foil: METAL                 # 0
+      Battery: OTHER                        # 1 hazardous, not a bin class
+      Aluminium blister pack: OTHER         # 2 multi-layer
+      Carded blister pack: OTHER            # 3 card + plastic laminate
+      Other plastic bottle: PLASTIC         # 4
+      Clear plastic bottle: PLASTIC         # 5
+      Glass bottle: GLASS                   # 6
+      Plastic bottle cap: PLASTIC           # 7
+      Metal bottle cap: METAL               # 8
+      Broken glass: GLASS                   # 9 138 boxes in 15 images (clustered shards)
+      Food Can: METAL                       # 10
+      Aerosol: METAL                        # 11
+      Drink can: METAL                      # 12
+      Toilet tube: CARDBOARD                # 13
+      Other carton: CARDBOARD               # 14
+      Egg carton: CARDBOARD                 # 15
+      Drink carton: CARDBOARD               # 16 Tetra Pak
+      Corrugated carton: CARDBOARD          # 17
+      Meal carton: CARDBOARD                # 18
+      Pizza box: CARDBOARD                  # 19
+      Paper cup: PAPER                      # 20
+      Disposable plastic cup: PLASTIC       # 21
+      Foam cup: PLASTIC                     # 22 EPS
+      Glass cup: GLASS                      # 23
+      Other plastic cup: PLASTIC            # 24
+      Food waste: BIODEGRADABLE             # 25
+      Glass jar: GLASS                      # 26
+      Plastic lid: PLASTIC                  # 27
+      Metal lid: METAL                      # 28
+      Other plastic: PLASTIC                # 29
+      Magazine paper: PAPER                 # 30
+      Tissues: PAPER                        # 31
+      Wrapping paper: PAPER                 # 32
+      Normal paper: PAPER                   # 33
+      Paper bag: PAPER                      # 34
+      Plastified paper bag: PAPER           # 35
+      Plastic film: PLASTIC                 # 36
+      Six pack rings: PLASTIC               # 37
+      Garbage bag: OTHER                    # 38 mixed contents
+      Other plastic wrapper: PLASTIC        # 39
+      Single-use carrier bag: PLASTIC       # 40
+      Polypropylene bag: PLASTIC            # 41
+      Crisp packet: PLASTIC                 # 42 metallised film, not METAL
+      Spread tub: PLASTIC                   # 43
+      Tupperware: PLASTIC                   # 44
+      Disposable food container: PLASTIC    # 45
+      Foam food container: PLASTIC          # 46 EPS
+      Other plastic container: PLASTIC      # 47
+      Plastic glooves: PLASTIC              # 48 (TACO's spelling)
+      Plastic utensils: PLASTIC             # 49
+      Pop tab: METAL                        # 50
+      Rope & strings: OTHER                 # 51 material unknown
+      Scrap metal: METAL                    # 52
+      Shoe: OTHER                           # 53
+      Squeezable tube: PLASTIC              # 54
+      Plastic straw: PLASTIC                # 55
+      Paper straw: PAPER                    # 56
+      Styrofoam piece: PLASTIC              # 57 EPS
+      Unlabeled litter: OTHER               # 58
+      Cigarette: OTHER                      # 59
+
+  # HITL Recycling ("Recycling Waste and Litter", Humans in the Loop), about 3200 street/pavement photos with one
+  # "litter" rectangle each, Supervisely JSON. Class: Object-tag overrides first, then the Material tag
+  # (dataset_research section 3b, 7-class column). About 8% of objects have no Material tag; they become OTHER.
+  - name: hitl
+    format: supervisely
+    kaggle: humansintheloop/recycling-dataset
+    locate: ["recycling-dataset", "Recycling Dataset", "recycling"]
+    box_frame: auto
+    domain: real_world
+    licence: "CC0 (Humans in the Loop, Recycling dataset)"
+    class_from_tag: Material
+    untagged: OTHER
+    tag_overrides:
+      Object:
+        cigarettebutt: OTHER        # overrides the material (butts are sometimes tagged paper)
+        foodwaste: BIODEGRADABLE
+        battery: OTHER
+        lighter: OTHER
+        vapeitem: OTHER
+        vapepack: OTHER
+        heets: OTHER
+        fireworks: OTHER
+        binbag: OTHER               # mixed contents
+        facemask: OTHER
+        clothing: OTHER
+        shoe: OTHER
+        tyre: OTHER
+        hairtie: OTHER
+        rubberband: OTHER
+        box: CARDBOARD
+        drinkcarton: CARDBOARD
+        cigarettepack: CARDBOARD
+    class_map:                      # Material tag values (all ten listed in meta.json)
+      aluminum: METAL
+      celluloseacetate: OTHER
+      glass: GLASS
+      metal: METAL
+      paper: PAPER
+      plastic: PLASTIC
+      polystyrene: PLASTIC
+      rubber: OTHER
+      tetrapak: CARDBOARD
+      textile: OTHER
+
+  # DWSD (Dense Waste Segmentation Dataset, Mendeley gr99ny6b8p), 784 photos of streets and parks in Kolkata,
+  # Labelme polygons in 14 classes. Used ONLY as the held-out "India real-world" test set: all images go to test.
+  # The user uploads the contents of the Mendeley zip as a private Kaggle dataset; any folder whose name contains
+  # "dwsd", "dswd" or "dense waste" is found. The exact label spellings are not published, so spelling variants
+  # are listed (labels are matched ignoring case, spaces and punctuation); an unknown label stops the build and
+  # names it.
+  - name: dwsd
+    format: labelme
+    kaggle: "your private upload of Mendeley DWSD (gr99ny6b8p), named e.g. dwsd-india"
+    optional: true
+    locate: ["dwsd", "dswd", "dense waste", "gr99ny6b8p"]
+    locate_match: contains
+    box_frame: auto
+    domain: india
+    licence: "CC BY 4.0 (DWSD, Mendeley Data 10.17632/gr99ny6b8p.1)"
+    force_split: test
+    allow_unused_map_keys: true
+    class_map:
+      plastic containers: PLASTIC
+      plastic container: PLASTIC
+      plastic bottles: PLASTIC
+      plastic bottle: PLASTIC
+      thermocol: PLASTIC            # EPS
+      thermocol plates: PLASTIC
+      thermocol plate: PLASTIC
+      plastic: PLASTIC
+      plastic cups: PLASTIC
+      plastic cup: PLASTIC
+      nylon: PLASTIC                # Indian usage: polythene bags and sheets
+      metal bottles: METAL
+      metal bottle: METAL
+      aluminium foil: METAL
+      aluminum foil: METAL
+      glass: GLASS
+      paper: PAPER
+      paper cups: PAPER
+      paper cup: PAPER
+      plastic cardboard: CARDBOARD  # ambiguous name: check about 20 samples (coated board -> CARDBOARD)
+      cloth: OTHER

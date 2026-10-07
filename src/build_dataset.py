@@ -1,27 +1,43 @@
-"""Generation 2: merge several waste-detection datasets (YOLO or COCO) into one YOLO dataset.
+"""Generation 2: merge several waste-detection datasets (YOLO, COCO, Supervisely, Labelme) into one YOLO dataset.
 
     python src/build_dataset.py --sources configs/gen2/sources.yaml --out data_gen2 --seed 42
-    python src/build_dataset.py --sources configs/gen2/sources.yaml --out /kaggle/working/gen2 \
+    python src/build_dataset.py --sources configs/gen2/sources.yaml --out /kaggle/working/gen2_data \
         --search-root /kaggle/input --max-side 1280
+
+Relocate mode: a later notebook gets a finished build as a read-only input (e.g. /kaggle/input/<notebook>/gen2_data).
+The lists and yamls inside it point to where it was built, so rewrite them into a writable folder:
+
+    python src/build_dataset.py --relocate-from /kaggle/input/<notebook>/gen2_data --out /kaggle/working/gen2_cfg
+
+This writes data.yaml, data_test_*.yaml, lists/*.txt and split.csv (with a 'path' column) into --out, every path
+pointing into the read-only build. Nothing is written into the build folder.
 
 Steps:
   1. Read the sources config: target classes, and per source its format, where to find it, and how its classes map
-     to the target classes (a target name, drop_annotation or drop_image; an unmapped class is an error).
+     to the target classes (a target name, drop_annotation, drop_and_mask or drop_image; an unmapped class is an
+     error).
   2. Read every enabled source. YOLO: images under any images/ folder, labels in the matching labels/ folder
      (Ultralytics' rule). COCO: one annotations json and an image folder; crowd and invalid boxes are skipped
-     and counted.
-  3. Write every kept image as JPEG quality 92 to <out>/images/<source>__<name>.jpg, with EXIF orientation
-     applied (and the EXIF dropped, so no loader rotates it twice) and the long side at most --max-side. The
-     boxes are written, normalized, to <out>/labels/.
-  4. Split: duplicates across all sources are grouped with verify_dataset's rules (same bytes, same Roboflow
+     and counted. Supervisely: <dataset>/ann/<image>.json next to <dataset>/img/<image>, plus the project
+     meta.json; the class can come from an object tag (e.g. Material). Labelme: one json per image with
+     polygon/rectangle shapes; each shape's bounding box is one box. A source that is not found is an error naming
+     the Kaggle dataset to attach, unless it is optional (then it is skipped with a warning).
+  3. Optional per source: force_split (every image to one split) and subsample (a seeded, class-stratified sample
+     of a pinned source's train/valid images; test is never subsampled).
+  4. Write every kept image as JPEG quality 92 to <out>/images/<source>__<name>.jpg, with EXIF orientation
+     applied (and the EXIF dropped, so no loader rotates it twice) and the long side at most --max-side. Boxes
+     mapped to drop_and_mask are painted mid-grey (114, the YOLO letterbox colour). The boxes are written,
+     normalized, to <out>/labels/.
+  5. Split: duplicates across all sources are grouped with verify_dataset's rules (same bytes, same Roboflow
      source image within a source, near-identical dHash or thumbnail). Groups are then split 70/20/10, stratified
      by (source, dominant class), and a group always stays in one split. A source with keep_split_csv keeps its
      Gen 1 assignment; its duplicates in other sources follow it, and test always wins over valid and train.
-  5. Outputs: split.csv, lists/{train,valid,test}.txt, lists/test_<domain>.txt, lists/test_src_<source>.txt,
+  6. Outputs: split.csv, lists/{train,valid,test}.txt, lists/test_<domain>.txt, lists/test_src_<source>.txt,
      data.yaml, data_test_<domain>.yaml, data_test_src_<source>.yaml and build_report.json.
 
 The source folders are only read. The output is the same for the same seed, inputs and settings.
 """
+import base64
 import argparse
 import csv
 import hashlib
@@ -37,7 +53,7 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verify_dataset import (  # noqa: E402
@@ -47,20 +63,31 @@ from verify_dataset import (  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 JPEG_QUALITY = 92
-DROP_ANN, DROP_IMG = "drop_annotation", "drop_image"
+DROP_ANN, DROP_IMG, DROP_MASK = "drop_annotation", "drop_image", "drop_and_mask"
+DROP_TARGETS = (DROP_ANN, DROP_IMG, DROP_MASK)
+MASK_GREY = (114, 114, 114)  # YOLO's letterbox colour: a masked object reads as "no image here", not background
 SPLIT_PRIORITY = {"test": 2, "valid": 1, "train": 0}  # a duplicate group pinned to several splits joins the highest
 ORIENT_SWAPS = {5, 6, 7, 8}  # EXIF orientations that swap width and height
 ASPECT_TOL = 0.02  # recorded vs actual image size: same aspect ratio within 2%
 SKIP_DIRS = {"images", "labels", "__pycache__", "node_modules", "site-packages"}
-SOURCE_KEYS = {"name", "enabled", "format", "locate", "names_file", "annotations", "images_dir", "class_field",
-               "box_frame", "class_map", "domain", "licence", "keep_split_csv", "max_images", "keep_empty"}
+FORMATS = ("yolo", "coco", "supervisely", "labelme")
+PIXEL_FORMATS = ("coco", "supervisely", "labelme")  # boxes in pixels of a recorded image size
+SOURCE_KEYS = {"name", "enabled", "format", "locate", "locate_match", "names_file", "annotations", "images_dir",
+               "class_field", "box_frame", "class_map", "allow_unused_map_keys", "class_from_tag", "tag_overrides",
+               "untagged", "domain", "licence", "kaggle", "optional", "keep_split_csv", "force_split", "subsample",
+               "max_images", "keep_empty"}
 TOP_KEYS = {"classes", "sources"}
 SLUG = re.compile(r"^[A-Za-z0-9_-]+$")
 OUTPUT_FILES = ("split.csv", "build_report.json", "labels.cache")
+CONTENT_DEPTH = 4  # how deep below a located folder its ann/ folders or json files are looked for
 
 
 class BuildError(Exception):
     """A problem with the config or the inputs; the message says what to fix."""
+
+
+class SourceMissing(BuildError):
+    """A source's files were not found under the search root (skipped with a warning if the source is optional)."""
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -82,8 +109,8 @@ def load_config(path):
     classes = [str(c) for c in cfg.get("classes") or []]
     if not classes or len(set(classes)) != len(classes):
         raise BuildError(f"{path}: 'classes' must be a non-empty list of unique target class names")
-    if {DROP_ANN, DROP_IMG} & set(classes):
-        raise BuildError(f"{path}: '{DROP_ANN}' and '{DROP_IMG}' cannot be class names")
+    if set(DROP_TARGETS) & set(classes):
+        raise BuildError(f"{path}: {list(DROP_TARGETS)} cannot be class names")
     sources, seen = [], set()
     for i, src in enumerate(cfg.get("sources") or []):
         where = f"{path}: source #{i + 1}"
@@ -100,49 +127,115 @@ def load_config(path):
         seen.add(name.lower())
         if not src.get("enabled", True):
             continue  # disabled sources may hold unfinished placeholders
-        where = f"{path}: source '{name}'"
-        s = {"name": name, "format": src.get("format"),
-             "locate": [str(v) for v in as_list(src.get("locate"))], "names_file": src.get("names_file"),
-             "annotations": src.get("annotations"), "images_dir": src.get("images_dir"),
-             "class_field": src.get("class_field", "name"), "box_frame": src.get("box_frame", "auto"),
-             "class_map": src.get("class_map"), "domain": str(src.get("domain", "")),
-             "licence": src.get("licence"), "keep_split_csv": src.get("keep_split_csv"),
-             "max_images": src.get("max_images"), "keep_empty": bool(src.get("keep_empty", False))}
-        if s["format"] not in ("yolo", "coco"):
-            raise BuildError(f"{where}: 'format' must be yolo or coco (got {s['format']!r})")
-        if s["format"] == "yolo" and not s["locate"]:
-            raise BuildError(f"{where}: a yolo source needs 'locate' (its folder name)")
-        if s["format"] == "coco" and not s["annotations"]:
-            raise BuildError(f"{where}: a coco source needs 'annotations' (the json file name)")
-        if s["class_field"] not in ("name", "supercategory"):
-            raise BuildError(f"{where}: 'class_field' must be name or supercategory")
-        if s["box_frame"] not in ("auto", "display", "raw"):
-            raise BuildError(f"{where}: 'box_frame' must be auto, display or raw")
-        if not SLUG.match(s["domain"]):
-            raise BuildError(f"{where}: 'domain' is required (e.g. studio or real_world), letters/digits/_/- only")
-        if not isinstance(s["licence"], str) or not s["licence"].strip():
-            raise BuildError(f"{where}: 'licence' is required (a string, e.g. 'CC BY 4.0')")
-        if not isinstance(s["class_map"], dict) or not s["class_map"]:
-            raise BuildError(f"{where}: 'class_map' must map each source class to a target class, "
-                             f"{DROP_ANN} or {DROP_IMG}")
-        s["class_map"] = {str(k): str(v) for k, v in s["class_map"].items()}
-        bad = sorted({v for v in s["class_map"].values() if v not in classes and v not in (DROP_ANN, DROP_IMG)})
-        if bad:
-            raise BuildError(f"{where}: class_map targets {bad} are not in classes {classes} "
-                             f"(or {DROP_ANN} / {DROP_IMG})")
-        if s["max_images"] is not None and (not isinstance(s["max_images"], int) or s["max_images"] < 1):
-            raise BuildError(f"{where}: 'max_images' must be a positive integer")
-        sources.append(s)
+        sources.append(check_source(src, name, f"{path}: source '{name}'", classes))
     if not sources:
         raise BuildError(f"{path}: no enabled sources")
     return classes, sources
 
 
+def check_targets(mapping, classes, where, what):
+    bad = sorted({v for v in mapping.values() if v not in classes and v not in DROP_TARGETS})
+    if bad:
+        raise BuildError(f"{where}: {what} targets {bad} are not in classes {classes} (or {', '.join(DROP_TARGETS)})")
+
+
+def is_pos_int(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+
+
+def check_source(src, name, where, classes):
+    """Validate one enabled source entry and return it with defaults filled in."""
+    fmt = src.get("format")
+    s = {"name": name, "format": fmt,
+         "locate": [str(v) for v in as_list(src.get("locate"))], "locate_match": src.get("locate_match", "exact"),
+         "names_file": src.get("names_file"), "annotations": src.get("annotations"),
+         "images_dir": src.get("images_dir"), "class_field": src.get("class_field", "name"),
+         "box_frame": src.get("box_frame", "auto"), "class_map": src.get("class_map"),
+         "allow_unused_map_keys": bool(src.get("allow_unused_map_keys", False)),
+         "class_from_tag": src.get("class_from_tag"), "tag_overrides": src.get("tag_overrides") or {},
+         "untagged": src.get("untagged"), "domain": str(src.get("domain", "")), "licence": src.get("licence"),
+         "kaggle": src.get("kaggle"), "optional": bool(src.get("optional", False)),
+         "keep_split_csv": src.get("keep_split_csv"), "force_split": src.get("force_split"),
+         "subsample": src.get("subsample"), "max_images": src.get("max_images"),
+         "keep_empty": bool(src.get("keep_empty", False))}
+    if fmt not in FORMATS:
+        raise BuildError(f"{where}: 'format' must be one of {', '.join(FORMATS)} (got {fmt!r})")
+    if fmt != "coco" and not s["locate"]:
+        raise BuildError(f"{where}: a {fmt} source needs 'locate' (its folder name)")
+    if fmt == "coco" and not s["annotations"]:
+        raise BuildError(f"{where}: a coco source needs 'annotations' (the json file name)")
+    misplaced = [k for k, fmts in (("names_file", ("yolo",)), ("annotations", ("coco",)), ("images_dir", ("coco",)),
+                                   ("class_field", ("coco",)), ("box_frame", PIXEL_FORMATS),
+                                   ("class_from_tag", ("supervisely",)), ("tag_overrides", ("supervisely",)),
+                                   ("untagged", ("supervisely",))) if k in src and fmt not in fmts]
+    if misplaced:
+        raise BuildError(f"{where}: {misplaced} cannot be used with format {fmt}")
+    if s["locate_match"] not in ("exact", "contains"):
+        raise BuildError(f"{where}: 'locate_match' must be exact or contains")
+    if s["class_field"] not in ("name", "supercategory"):
+        raise BuildError(f"{where}: 'class_field' must be name or supercategory")
+    if s["box_frame"] not in ("auto", "display", "raw"):
+        raise BuildError(f"{where}: 'box_frame' must be auto, display or raw")
+    if not SLUG.match(s["domain"]):
+        raise BuildError(f"{where}: 'domain' is required (e.g. studio or real_world), letters/digits/_/- only")
+    if not isinstance(s["licence"], str) or not s["licence"].strip():
+        raise BuildError(f"{where}: 'licence' is required (a string, e.g. 'CC BY 4.0')")
+    if s["kaggle"] is not None and not isinstance(s["kaggle"], str):
+        raise BuildError(f"{where}: 'kaggle' must be a string (the Kaggle dataset to attach, e.g. owner/slug)")
+    if not isinstance(s["class_map"], dict) or not s["class_map"]:
+        raise BuildError(f"{where}: 'class_map' must map each source class to a target class or one of "
+                         f"{', '.join(DROP_TARGETS)}")
+    s["class_map"] = {str(k): str(v) for k, v in s["class_map"].items()}
+    check_targets(s["class_map"], classes, where, "class_map")
+    if fmt == "supervisely":
+        if s["class_from_tag"] is not None:
+            if not isinstance(s["class_from_tag"], str) or not s["class_from_tag"]:
+                raise BuildError(f"{where}: 'class_from_tag' must be a tag name (e.g. Material)")
+            if s["untagged"] is None:
+                raise BuildError(f"{where}: with class_from_tag, 'untagged' must say what an object without that "
+                                 f"tag becomes (a target class or one of {', '.join(DROP_TARGETS)})")
+        elif s["untagged"] is not None:
+            raise BuildError(f"{where}: 'untagged' needs 'class_from_tag'")
+        if s["untagged"] is not None:
+            s["untagged"] = str(s["untagged"])
+            check_targets({"untagged": s["untagged"]}, classes, where, "untagged")
+        if not isinstance(s["tag_overrides"], dict) or not all(isinstance(v, dict) and v
+                                                                for v in s["tag_overrides"].values()):
+            raise BuildError(f"{where}: 'tag_overrides' must map a tag name to {{tag value: target}}")
+        s["tag_overrides"] = {str(t): {str(k): str(v) for k, v in m.items()} for t, m in s["tag_overrides"].items()}
+        for t, m in s["tag_overrides"].items():
+            check_targets(m, classes, where, f"tag_overrides.{t}")
+    if s["max_images"] is not None and not is_pos_int(s["max_images"]):
+        raise BuildError(f"{where}: 'max_images' must be a positive integer")
+    if s["force_split"] is not None:
+        if s["force_split"] not in SPLITS:
+            raise BuildError(f"{where}: 'force_split' must be one of {SPLITS}")
+        if s["keep_split_csv"]:
+            raise BuildError(f"{where}: use either 'force_split' or 'keep_split_csv', not both")
+    sub = s["subsample"]
+    if sub is not None:
+        if not isinstance(sub, dict) or not sub:
+            raise BuildError(f"{where}: 'subsample' must be a mapping like {{train: 3000, valid: 900, seed: 42}}")
+        if "test" in sub:
+            raise BuildError(f"{where}: 'subsample' cannot include test: test images are never subsampled")
+        unknown = set(sub) - {"train", "valid", "seed"}
+        if unknown:
+            raise BuildError(f"{where}: unknown 'subsample' keys {sorted(unknown)}; allowed: train, valid, seed")
+        if not all(is_pos_int(sub[k]) for k in ("train", "valid") if k in sub) or not {"train", "valid"} & set(sub):
+            raise BuildError(f"{where}: 'subsample' needs train and/or valid as positive integers")
+        if "seed" in sub and (not isinstance(sub["seed"], int) or isinstance(sub["seed"], bool)):
+            raise BuildError(f"{where}: 'subsample.seed' must be an integer")
+        if not s["keep_split_csv"]:
+            raise BuildError(f"{where}: 'subsample' works on a source pinned by keep_split_csv")
+    return s
+
+
 def check_class_map(src, source_names):
-    """Every source class must be mapped and every mapped name must exist in the source."""
+    """Every source class must be mapped and every mapped name must exist in the source (unless the source allows
+    unused names, e.g. spelling variants of a class whose exact spelling is not known in advance)."""
     cmap = src["class_map"]
     missing = [n for n in source_names if n not in cmap]
-    extra = sorted(set(cmap) - set(source_names))
+    extra = [] if src["allow_unused_map_keys"] else sorted(set(cmap) - set(source_names))
     problems = []
     if missing:
         problems.append(f"unmapped classes {missing}")
@@ -158,6 +251,19 @@ def check_class_map(src, source_names):
 # ---------------------------------------------------------------------------------------------------------------
 def norm_name(name):
     return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def name_matches(name, wanted, mode="exact"):
+    """wanted: normalized names. exact: the folder's normalized name is one of them; contains: it contains one."""
+    n = norm_name(name)
+    return n in wanted if mode == "exact" else any(w and w in n for w in wanted)
+
+
+def missing_hint(src):
+    """The end of a 'not found' message: which Kaggle dataset to attach."""
+    if src.get("kaggle"):
+        return f". Attach the Kaggle dataset '{src['kaggle']}' to the notebook (or fix --search-root / locate)"
+    return ". Check --search-root and the source's locate setting"
 
 
 def walk_dirs(start, skip=()):
@@ -193,36 +299,77 @@ def outermost(paths):
     return [p for p in paths if not any(q != p and p.is_relative_to(q) for q in paths)]
 
 
-def locate_yolo(src, search_root, skip=()):
+def dirs_below(folder, depth):
+    """folder and its subfolders down to `depth` levels, breadth first, sorted; hidden folders skipped."""
+    level = [folder]
+    for _ in range(depth + 1):
+        next_level = []
+        for d in level:
+            yield d
+            try:
+                next_level += sorted(c for c in d.iterdir() if c.is_dir() and not c.name.startswith("."))
+            except OSError:
+                continue
+        level = next_level
+
+
+def has_supervisely(folder):
+    """A Supervisely dataset (ann/ next to img/) at or below folder."""
+    return any(d.name == "ann" and (d.parent / "img").is_dir() for d in dirs_below(folder, CONTENT_DEPTH))
+
+
+def has_json(folder):
+    for d in dirs_below(folder, CONTENT_DEPTH):
+        try:
+            if any(p.suffix.lower() == ".json" and p.is_file() for p in d.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def locate_named(src, search_root, skip, ok, what):
+    """The one outermost folder under search_root whose name matches src['locate'] and that passes ok()."""
     wanted = {norm_name(n) for n in src["locate"]}
     for n in src["locate"]:  # an explicit path wins
         p = Path(n) if Path(n).is_absolute() else search_root / n
-        if p.is_dir() and has_yolo_images(p):
+        if p.is_dir() and ok(p):
             return p.resolve()
-    found = outermost([d for d in walk_dirs(search_root, skip) if norm_name(d.name) in wanted and has_yolo_images(d)])
-    if len(found) != 1:
-        raise BuildError(f"source '{src['name']}': {'no' if not found else 'several'} folders named "
-                         f"{src['locate']} with images/ subfolders under {search_root}"
-                         + (":\n  " + "\n  ".join(map(str, found)) if found else ""))
+    found = outermost([d for d in walk_dirs(search_root, skip)
+                       if name_matches(d.name, wanted, src["locate_match"]) and ok(d)])
+    if not found:
+        raise SourceMissing(f"source '{src['name']}': no folder named {src['locate']}"
+                            f"{' (or containing one of these names)' if src['locate_match'] == 'contains' else ''}"
+                            f" with {what} under {search_root}" + missing_hint(src))
+    if len(found) > 1:
+        raise BuildError(f"source '{src['name']}': several folders named {src['locate']} with {what} under "
+                         f"{search_root}:\n  " + "\n  ".join(map(str, found)))
     return found[0].resolve()
+
+
+def locate_yolo(src, search_root, skip=()):
+    return locate_named(src, search_root, skip, has_yolo_images, "images/ subfolders")
 
 
 def locate_coco(src, search_root, skip=()):
     rel = Path(src["annotations"])
     if rel.is_absolute():
         if not rel.is_file():
-            raise BuildError(f"source '{src['name']}': annotations file {rel} not found")
+            raise SourceMissing(f"source '{src['name']}': annotations file {rel} not found" + missing_hint(src))
         return rel.resolve()
     wanted = {norm_name(n) for n in src["locate"]}
     found = []
     for d in walk_dirs(search_root, skip):
-        if (d / rel).is_file() and (not wanted or any(norm_name(p.name) in wanted for p in [d, *d.parents])):
+        if (d / rel).is_file() and (not wanted or any(name_matches(p.name, wanted, src["locate_match"])
+                                                      for p in [d, *d.parents])):
             found.append((d / rel).resolve())
     found = sorted(set(found))
-    if len(found) != 1:
-        raise BuildError(f"source '{src['name']}': {'no' if not found else 'several'} annotation files "
-                         f"'{rel.as_posix()}'{' inside ' + str(src['locate']) if wanted else ''} under {search_root}"
-                         + (":\n  " + "\n  ".join(map(str, found)) if found else ""))
+    where = f"'{rel.as_posix()}'{' inside ' + str(src['locate']) if wanted else ''} under {search_root}"
+    if not found:
+        raise SourceMissing(f"source '{src['name']}': no annotation file {where}" + missing_hint(src))
+    if len(found) > 1:
+        raise BuildError(f"source '{src['name']}': several annotation files {where}:\n  "
+                         + "\n  ".join(map(str, found)))
     return found[0]
 
 
@@ -380,14 +527,16 @@ def map_yolo_item(item, src, names, classes, stats):
     boxes, issues = parse_label(item["label"], len(names))
     for k, v in issues.items():
         stats["label_issues"][k] += v
-    mapped = []
+    mapped, masks = [], []
     for cls, cx, cy, w, h in boxes:
         target = src["class_map"][names[cls]]
         if target == DROP_IMG:
             stats["images_dropped"][f"{DROP_IMG}:{names[cls]}"] += 1
             return False
-        if target == DROP_ANN:
-            stats["annotations_dropped"][f"{DROP_ANN}:{names[cls]}"] += 1
+        if target in (DROP_ANN, DROP_MASK):
+            stats["annotations_dropped"][f"{target}:{names[cls]}"] += 1
+            if target == DROP_MASK:
+                masks.append((cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2))
             continue
         box = clip_yolo((target_idx[target], cx, cy, w, h))
         if box is None:
@@ -396,7 +545,7 @@ def map_yolo_item(item, src, names, classes, stats):
         if max(abs(a - b) for a, b in zip(box[1:], (cx, cy, w, h))) > 1e-6:
             stats["warnings"]["clipped_boxes"] += 1
         mapped.append(box)
-    item["boxes"], item["had_boxes"] = mapped, bool(boxes)
+    item["boxes"], item["mask_boxes"], item["had_boxes"] = mapped, masks, bool(boxes)
     return True
 
 
@@ -422,7 +571,7 @@ def read_coco(src, ann_path, classes, stats):
 
 def map_coco_item(item, src, classes, stats):
     target_idx = {c: i for i, c in enumerate(classes)}
-    mapped = []
+    mapped, masks = [], []
     for a in item["anns"]:
         name = item["cats"].get(a.get("category_id"))
         if name is None:
@@ -435,12 +584,223 @@ def map_coco_item(item, src, classes, stats):
         if a.get("iscrowd"):
             stats["annotations_dropped"]["crowd"] += 1
             continue
-        if target == DROP_ANN:
-            stats["annotations_dropped"][f"{DROP_ANN}:{name}"] += 1
+        if target in (DROP_ANN, DROP_MASK):
+            stats["annotations_dropped"][f"{target}:{name}"] += 1
+            if target == DROP_MASK:
+                masks.append((-1, a.get("bbox")))
             continue
         mapped.append((target_idx[target], a.get("bbox")))
-    item["coco_anns"], item["had_boxes"] = mapped, bool(item["anns"])
+    # coco_anns / mask_anns: (class, [x, y, w, h]) in pixels of the recorded image size; shared by every pixel format
+    item["coco_anns"], item["mask_anns"], item["had_boxes"] = mapped, masks, bool(item["anns"])
     if not item["path"].is_file():
+        stats["images_dropped"]["missing_image_file"] += 1
+        return False
+    return True
+
+
+def points_bbox(points):
+    """[x, y, w, h] around a list of [x, y] points, or None if there are fewer than two valid points."""
+    try:
+        pts = np.asarray(points, dtype=float).reshape(-1, 2)
+    except (TypeError, ValueError):
+        return None
+    if len(pts) < 2 or not np.isfinite(pts).all():
+        return None
+    x0, y0 = pts.min(axis=0)
+    x1, y1 = pts.max(axis=0)
+    return [float(x0), float(y0), float(x1 - x0), float(y1 - y0)]
+
+
+def find_image(folder, name, stem=None):
+    """folder/name, or a file in folder with the same stem and an image extension."""
+    if name and (folder / name).is_file():
+        return folder / name
+    stem = stem if stem is not None else Path(name).stem
+    try:
+        hits = sorted(p for p in folder.iterdir() if p.is_file() and p.stem == stem and p.suffix.lower() in IMG_EXTS)
+    except OSError:
+        return None
+    return hits[0] if hits else None
+
+
+def tag_value(tag):
+    """(name, value) of a Supervisely tag; tags are {"name": ..., "value": ...} (older exports: plain strings)."""
+    if isinstance(tag, dict):
+        return str(tag.get("name", "")), None if tag.get("value") is None else str(tag.get("value"))
+    return str(tag), None
+
+
+def read_supervisely(src, root, classes, stats):
+    """A Supervisely project: <dataset>/ann/<image>.json next to <dataset>/img/<image>, and meta.json.
+
+    Each object's class: the first tag_overrides hit (tag -> value -> target), else the class_from_tag tag's value
+    looked up in class_map (no such tag: 'untagged'), else (without class_from_tag) the object's classTitle.
+    Returns (source class names for check_class_map, items).
+    """
+    ann_dirs = sorted(d for d in root.rglob("ann") if d.is_dir() and (d.parent / "img").is_dir())
+    if not ann_dirs:
+        raise SourceMissing(f"source '{src['name']}': no Supervisely ann/ + img/ folders in {root}" + missing_hint(src))
+    tag_name, overrides = src["class_from_tag"], src["tag_overrides"]
+    meta_values = defaultdict(set)  # tag name -> values declared in meta.json
+    meta_classes = set()
+    metas = [p for p in sorted(root.rglob("meta.json")) if p.parent.name not in ("ann", "img")]
+    for p in metas:
+        try:
+            meta = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for t in meta.get("tags", []) if isinstance(meta, dict) else []:
+            meta_values[str(t.get("name"))].update(str(v) for v in t.get("values") or [])
+        meta_classes.update(str(c.get("title")) for c in (meta.get("classes", []) if isinstance(meta, dict) else []))
+    if not metas:
+        stats["warnings"]["supervisely_meta_json_not_found"] += 1
+    seen = set()
+    items = []
+    for ann_dir in ann_dirs:
+        img_dir = ann_dir.parent / "img"
+        for ap in sorted(p for p in ann_dir.iterdir() if p.is_file() and p.suffix.lower() == ".json"):
+            try:
+                ann = json.loads(ap.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                stats["images_dropped"]["unreadable_annotation_json"] += 1
+                continue
+            img_name = ap.name[:-5]  # Supervisely names the json <image file name>.json
+            img = find_image(img_dir, img_name, Path(img_name).stem if Path(img_name).suffix else img_name)
+            size = ann.get("size") or {}
+            objects = []
+            for obj in ann.get("objects", []):
+                geom = obj.get("geometryType", "")
+                bbox = points_bbox((obj.get("points") or {}).get("exterior")) if geom in ("rectangle", "polygon") \
+                    else None
+                problem = None if bbox else (f"unsupported_geometry:{geom}" if geom not in ("rectangle", "polygon")
+                                             else "invalid_bbox")
+                tags = dict(tag_value(t) for t in obj.get("tags", []))
+                override = next(((f"{t}={tags[t]}", m[tags[t]]) for t, m in overrides.items()
+                                 if tags.get(t) in m), None)
+                name = None
+                if override is None:
+                    name = tags.get(tag_name) if tag_name else str(obj.get("classTitle", ""))
+                    if name is not None:
+                        seen.add(name)
+                    else:
+                        stats["warnings"][f"objects_without_{tag_name}_tag"] += 1
+                objects.append({"name": name, "override": override, "bbox": bbox, "problem": problem})
+            path = img or img_dir / img_name
+            uid = (ann_dir.parent.relative_to(root) / path.name).as_posix()  # <dataset>/<image>, without img/
+            items.append({"source": src["name"], "uid": uid, "path": path,
+                          "recorded": (size.get("width"), size.get("height")), "objects": objects})
+    for t, m in overrides.items():  # a typo in an override value would silently never match
+        unknown = sorted(set(m) - meta_values[t]) if meta_values.get(t) else []
+        if unknown:
+            raise BuildError(f"source '{src['name']}': tag_overrides.{t} values {unknown} are not values of tag "
+                             f"'{t}' in meta.json ({sorted(meta_values[t])})")
+    declared = meta_values.get(tag_name, set()) if tag_name else meta_classes
+    items.sort(key=lambda it: it["uid"])
+    return sorted(seen | declared), items
+
+
+def label_lookup(src):
+    """Loose class-name matching for Labelme labels: case, spaces and punctuation are ignored, and a trailing
+    instance number ('bottle 2') is tried without the number. Returns a function label -> class_map key (or the
+    label itself when nothing matches, so check_class_map reports it as unmapped)."""
+    keys = {norm_name(k): k for k in src["class_map"]}
+
+    def lookup(label):
+        n = norm_name(label)
+        return keys.get(n) or keys.get(re.sub(r"\d+$", "", n)) or label
+    return lookup
+
+
+def read_labelme(src, root, classes, stats):
+    """Labelme: one json per image with 'shapes' (polygon, rectangle or circle) and 'imagePath'. Each shape becomes
+    one box (its bounding box). The image is found from imagePath (relative to the json), else by the json's stem,
+    else decoded from the embedded imageData. Returns (source class names, items)."""
+    lookup = label_lookup(src)
+    seen, items, by_image = set(), [], {}
+    for jp in sorted(root.rglob("*.json")):
+        try:
+            ann = json.loads(jp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            stats["warnings"]["unreadable_json_skipped"] += 1
+            continue
+        if not isinstance(ann, dict) or not isinstance(ann.get("shapes"), list):
+            stats["warnings"]["non_labelme_json_skipped"] += 1
+            continue
+        ipath = str(ann.get("imagePath") or "").replace("\\", "/")
+        img = None
+        if ipath:
+            cand = (jp.parent / ipath)
+            img = cand if cand.is_file() else find_image(jp.parent, Path(ipath).name, Path(ipath).stem)
+        img = img or find_image(jp.parent, "", jp.stem)
+        image_bytes = None
+        if img is None and ann.get("imageData"):
+            try:
+                image_bytes = base64.b64decode(ann["imageData"])
+                stats["warnings"]["image_from_embedded_imageData"] += 1
+            except (ValueError, TypeError):
+                image_bytes = None
+        if img is not None:
+            img = img.resolve()
+            if img in by_image:
+                stats["warnings"]["second_json_for_same_image_skipped"] += 1
+                continue
+            by_image[img] = jp
+        objects = []
+        for sh in ann["shapes"]:
+            kind = sh.get("shape_type") or "polygon"
+            pts = sh.get("points")
+            if kind == "circle":  # centre and one point on the circle
+                try:
+                    (cx, cy), (px, py) = pts[:2]
+                    r = float(np.hypot(px - cx, py - cy))
+                    pts = [[cx - r, cy - r], [cx + r, cy + r]]
+                except (TypeError, ValueError):
+                    pts = None
+            bbox = points_bbox(pts) if kind in ("polygon", "rectangle", "circle") else None
+            problem = None if bbox else (f"unsupported_shape:{kind}" if kind not in ("polygon", "rectangle", "circle")
+                                         else "invalid_bbox")
+            name = lookup(str(sh.get("label", "")))
+            seen.add(name)
+            objects.append({"name": name, "override": None, "bbox": bbox, "problem": problem})
+        path = img if img is not None else jp.parent / (Path(ipath).name if ipath else jp.stem + ".jpg")
+        try:
+            uid = path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            uid = jp.relative_to(root).with_suffix(Path(path).suffix or ".jpg").as_posix()
+        items.append({"source": src["name"], "uid": uid, "path": path, "image_bytes": image_bytes,
+                      "recorded": (ann.get("imageWidth"), ann.get("imageHeight")), "objects": objects})
+    if not items:
+        raise SourceMissing(f"source '{src['name']}': no Labelme json files (with 'shapes') in {root}"
+                            + missing_hint(src))
+    items.sort(key=lambda it: it["uid"])
+    return sorted(seen), items
+
+
+def map_objects_item(item, src, classes, stats):
+    """Map a Supervisely or Labelme item's objects to target classes. Returns False if the image is dropped."""
+    target_idx = {c: i for i, c in enumerate(classes)}
+    mapped, masks = [], []
+    for obj in item["objects"]:
+        if obj["override"]:
+            label, target = obj["override"]
+        elif obj["name"] is None:
+            label, target = "untagged", src["untagged"]
+        else:
+            label, target = obj["name"], src["class_map"][obj["name"]]
+        if target == DROP_IMG:
+            stats["images_dropped"][f"{DROP_IMG}:{label}"] += 1
+            return False
+        if obj["bbox"] is None:
+            stats["annotations_dropped"][obj["problem"]] += 1
+            continue
+        if target in (DROP_ANN, DROP_MASK):
+            stats["annotations_dropped"][f"{target}:{label}"] += 1
+            if target == DROP_MASK:
+                masks.append((-1, obj["bbox"]))
+            continue
+        mapped.append((target_idx[target], obj["bbox"]))
+    item["coco_anns"], item["mask_anns"], item["had_boxes"] = mapped, masks, bool(item["objects"])
+    if item.get("image_bytes") is None and not Path(item["path"]).is_file():
         stats["images_dropped"]["missing_image_file"] += 1
         return False
     return True
@@ -449,6 +809,17 @@ def map_coco_item(item, src, classes, stats):
 # ---------------------------------------------------------------------------------------------------------------
 # Writing images
 # ---------------------------------------------------------------------------------------------------------------
+def paint_masks(img, boxes):
+    """Paint normalized (x0, y0, x1, y1) regions of an RGB image mid-grey, in place, covering every touched pixel."""
+    W, H = img.size
+    draw = ImageDraw.Draw(img)
+    for x0, y0, x1, y1 in boxes:
+        l, t = max(0, int(np.floor(x0 * W))), max(0, int(np.floor(y0 * H)))
+        r, b = min(W, int(np.ceil(x1 * W))), min(H, int(np.ceil(y1 * H)))
+        if r > l and b > t:
+            draw.rectangle([l, t, r - 1, b - 1], fill=MASK_GREY)
+
+
 def process_item(item, src, out_dir, max_side):
     """Decode, EXIF-transpose, (for COCO) convert boxes, downscale, hash and write one image and its label.
 
@@ -456,7 +827,7 @@ def process_item(item, src, out_dir, max_side):
     """
     warnings = Counter()
     try:
-        data = item["path"].read_bytes()
+        data = item["image_bytes"] if item.get("image_bytes") is not None else item["path"].read_bytes()
         with Image.open(io.BytesIO(data)) as im:
             raw_size = im.size
             orientation = im.getexif().get(0x0112, 1)
@@ -478,13 +849,19 @@ def process_item(item, src, out_dir, max_side):
             warnings["recorded_size_missing"] += 1
         try:
             boxes, w2 = coco_to_yolo(item["coco_anns"], (rec_w, rec_h), raw_size, orientation, src["box_frame"])
+            masks, _ = coco_to_yolo(item.get("mask_anns", []), (rec_w, rec_h), raw_size, orientation,
+                                    src["box_frame"])
         except ValueError:
             return None, "recorded_size_mismatch", warnings
         warnings.update(w2)
+        masks = [(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2) for _, cx, cy, w, h in masks]
     else:
-        boxes = item["boxes"]
+        boxes, masks = item["boxes"], item.get("mask_boxes", [])
     if not boxes and (item["had_boxes"] or not src["keep_empty"]):
         return None, "no_boxes_left" if item["had_boxes"] else "no_annotations", warnings
+    if masks:
+        paint_masks(img, masks)
+        warnings["masked_regions"] += len(masks)
     disp = (raw_size[1], raw_size[0]) if orientation in ORIENT_SWAPS else raw_size
     if scale < 1.0:
         target = (max(1, round(disp[0] * scale)), max(1, round(disp[1] * scale)))
@@ -574,6 +951,57 @@ def split_records(recs, classes, seed):
     return groups, excluded, conflicts
 
 
+def item_dominant(item, classes):
+    ids = [b[0] for b in item["boxes"]] if "boxes" in item else [c for c, _ in item["coco_anns"]]
+    return dominant_class([(c,) for c in ids], classes)
+
+
+def largest_remainder(sizes, n):
+    """Split n over strata in proportion to their sizes; the total is exactly n (n <= sum of sizes)."""
+    total = sum(sizes.values())
+    quota = {k: n * v / total for k, v in sizes.items()}
+    counts = {k: int(q) for k, q in quota.items()}
+    for k in sorted(quota, key=lambda k: (counts[k] - quota[k], k))[:n - sum(counts.values())]:
+        counts[k] += 1
+    return counts
+
+
+def subsample_items(items, src, classes, seed):
+    """Keep a seeded sample of a pinned source's train and valid images, stratified by dominant class.
+
+    subsample = {train: N, valid: M, seed: S}: each pinned split with a quota smaller than its size keeps exactly
+    that many images, every dominant class keeping its share (largest-remainder rounding). Test images, unpinned
+    images and splits without a quota are kept as they are. Returns (kept items sorted by uid, report).
+    """
+    cfg = src["subsample"]
+    seed = cfg.get("seed", seed)
+    by_split = defaultdict(list)
+    for it in items:
+        by_split[it.get("pinned")].append(it)
+    kept, report = [], {"seed": seed}
+    for split in sorted(by_split, key=str):
+        members = by_split[split]
+        want = cfg.get(split) if split in ("train", "valid") else None
+        if want is None or want >= len(members):
+            kept += members
+            if want is not None:
+                report[split] = {"requested": want, "before": len(members), "after": len(members)}
+            continue
+        strata = defaultdict(list)
+        for it in members:
+            strata[item_dominant(it, classes)].append(it)
+        counts = largest_remainder({c: len(v) for c, v in strata.items()}, want)
+        rng = random.Random(f"{seed}:{src['name']}:{split}")
+        chosen = []
+        for c in sorted(strata):
+            chosen += rng.sample(sorted(strata[c], key=lambda it: it["uid"]), counts[c])
+        kept += chosen
+        report[split] = {"requested": want, "before": len(members), "after": len(chosen),
+                         "dominant_class_before": {c: len(strata[c]) for c in sorted(strata)},
+                         "dominant_class_after": {c: counts[c] for c in sorted(strata)}}
+    return sorted(kept, key=lambda it: it["uid"]), report
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Main build
 # ---------------------------------------------------------------------------------------------------------------
@@ -616,17 +1044,29 @@ def build(sources_yaml, out, seed=42, max_side=1280, search_root=None, max_image
     out = Path(out).resolve()
 
     # 1. locate and read every source, check every class map before any image work
-    per_source, problems, roots = {}, [], []
+    per_source, problems, roots, skipped = {}, [], [], {}
     for src in sources:
         stats = new_stats()
-        if src["format"] == "yolo":
-            root = locate_yolo(src, search_root, skip=[out])
-            names, items = read_yolo(src, root, classes, stats)
-            location = root
-        else:
-            ann = locate_coco(src, search_root, skip=[out])
-            names, items, root = read_coco(src, ann, classes, stats)
-            location = ann
+        try:
+            if src["format"] == "coco":
+                ann = locate_coco(src, search_root, skip=[out])
+                names, items, root = read_coco(src, ann, classes, stats)
+                location = ann
+            else:
+                locate = {"yolo": locate_yolo,
+                          "supervisely": lambda s, r, skip: locate_named(s, r, skip, has_supervisely,
+                                                                         "Supervisely ann/ and img/ folders"),
+                          "labelme": lambda s, r, skip: locate_named(s, r, skip, has_json, "json files")}
+                root = locate[src["format"]](src, search_root, skip=[out])
+                reader = {"yolo": read_yolo, "supervisely": read_supervisely, "labelme": read_labelme}
+                names, items = reader[src["format"]](src, root, classes, stats)
+                location = root
+        except SourceMissing as e:
+            if not src["optional"]:
+                raise
+            skipped[src["name"]] = str(e)
+            log(f"WARNING: optional source '{src['name']}' skipped: {e}")
+            continue
         roots.append(root)
         problem = check_class_map(src, names)
         if problem:
@@ -638,11 +1078,13 @@ def build(sources_yaml, out, seed=42, max_side=1280, search_root=None, max_image
         log(f"{src['name']}: {len(items)} images in {location}")
     if problems:
         raise BuildError("Class map errors:\n  " + "\n  ".join(problems))
+    if not per_source:
+        raise BuildError("No sources found: " + "; ".join(skipped.values()))
     out = prepare_out_dir(out, [r.resolve() for r in roots])
 
-    # 2. sample, pin and map
+    # 2. sample, pin, map and subsample
     all_items = []
-    pin_report = {}
+    pin_report, sub_report = {}, {}
     for name, ps in per_source.items():
         src, items, stats = ps["src"], ps["items"], ps["stats"]
         stats["images_found"] = len(items)
@@ -674,11 +1116,22 @@ def build(sources_yaml, out, seed=42, max_side=1280, search_root=None, max_image
                                 "csv_rows_not_in_source": len(set(pinned) - set(basenames))}
             if hits < len(items):
                 stats["warnings"]["images_not_in_keep_split_csv"] += len(items) - hits
+        if src["force_split"]:
+            for it in items:
+                it["pinned"] = src["force_split"]
+        mapped = []
         for it in items:
-            ok = (map_yolo_item(it, src, ps["names"], classes, stats) if src["format"] == "yolo"
-                  else map_coco_item(it, src, classes, stats))
+            if src["format"] == "yolo":
+                ok = map_yolo_item(it, src, ps["names"], classes, stats)
+            elif src["format"] == "coco":
+                ok = map_coco_item(it, src, classes, stats)
+            else:
+                ok = map_objects_item(it, src, classes, stats)
             if ok:
-                all_items.append(it)
+                mapped.append(it)
+        if src["subsample"]:
+            mapped, sub_report[name] = subsample_items(mapped, src, classes, seed)
+        all_items += mapped
     assign_file_names(all_items)
 
     # 3. write images and labels
@@ -745,10 +1198,12 @@ def build(sources_yaml, out, seed=42, max_side=1280, search_root=None, max_image
             write_yaml(out / f"data_test_{kind}{v}.yaml", out, classes, {**lists, "test": lst})
             variants[f"{kind}{v}"] = {"yaml": f"data_test_{kind}{v}.yaml", "test_images": len(members)}
 
+    warnings = [f"optional source '{n}' was not found and is NOT in this build: {why}"
+                for n, why in skipped.items()] + warnings
     report = make_report(per_source, kept, groups, near_matches, excluded, conflicts, pin_report, classes,
                          variants, warnings, dict(seed=seed, max_side=max_side, search_root=search_root.as_posix(),
                                                   max_images=max_images, sources_yaml=sources_yaml.as_posix(),
-                                                  out=out.as_posix()))
+                                                  out=out.as_posix()), sub_report, skipped)
     (out / "build_report.json").write_text(json.dumps(report, indent=2))
     return report
 
@@ -762,7 +1217,7 @@ def count_block(recs, classes):
 
 
 def make_report(per_source, kept, groups, near_matches, excluded, conflicts, pin_report, classes, variants,
-                warnings, settings):
+                warnings, settings, sub_report=None, skipped=None):
     multi = [g for g in groups if len(g) > 1]
     rules = Counter(rule for _, _, rule in near_matches)
     sources = {}
@@ -780,6 +1235,9 @@ def make_report(per_source, kept, groups, near_matches, excluded, conflicts, pin
             "label_issues": dict(sorted(st["label_issues"].items())),
             "warnings": dict(sorted(st["warnings"].items())),
             "keep_split_csv": pin_report.get(name),
+            "force_split": src["force_split"],
+            "subsample": (sub_report or {}).get(name),
+            "kaggle": src["kaggle"], "optional": src["optional"],
             "splits": {s: count_block([r for r in mine if r["split"] == s], classes) for s in SPLITS},
         }
     domains = sorted({r["domain"] for r in kept})
@@ -793,6 +1251,7 @@ def make_report(per_source, kept, groups, near_matches, excluded, conflicts, pin
         "domains": {d: {s: count_block([r for r in kept if r["split"] == s and r["domain"] == d], classes)
                         for s in SPLITS} for d in domains},
         "sources": sources,
+        "skipped_sources": dict(skipped or {}),
         "duplicates": {
             "groups": len(multi), "images_in_groups": sum(len(g) for g in multi),
             "cross_source_groups": sum(len({r["source"] for r in g}) > 1 for g in multi),
@@ -817,6 +1276,9 @@ def print_summary(report, log=print):
     for name, s in report["sources"].items():
         log(f"{name} [{s['domain']}, {s['licence']}]: found {s['images_found']}, sampled {s['images_sampled']}, "
             f"kept {s['images_kept']} (" + ", ".join(f"{k} {v['images']}" for k, v in s["splits"].items()) + ")")
+        for split, sub in (s.get("subsample") or {}).items():
+            if split != "seed":
+                log(f"    subsampled {split}: {sub['before']} -> {sub['after']} (requested {sub['requested']})")
         if s["images_dropped"]:
             log(f"    images dropped: {s['images_dropped']}")
         if s["annotations_dropped"]:
@@ -829,18 +1291,82 @@ def print_summary(report, log=print):
     log("Test variants: " + ", ".join(f"{k} ({v['test_images']})" for k, v in report["test_variants"].items()))
     for w in report["warnings"]:
         log(f"Warning: {w}")
+    for name in report.get("skipped_sources", {}):
+        log(f"\n*** WARNING: optional source '{name}' was NOT found and is missing from this build. ***")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Relocate: point the lists and yamls of a finished (read-only) build at its current location
+# ---------------------------------------------------------------------------------------------------------------
+def relocate(built_dir, cfg_dir, log=print):
+    """Write data.yaml, data_test_*.yaml, lists/*.txt and split.csv into cfg_dir, every image path rewritten to
+    <built_dir>/images/<file>. built_dir is only read. Returns a summary dict."""
+    built, cfg = Path(built_dir).resolve(), Path(cfg_dir).resolve()
+    for need in ("build_report.json", "split.csv", "data.yaml", "lists", "images", "labels"):
+        if not (built / need).exists():
+            raise BuildError(f"--relocate-from {built} is not a finished build: {need} is missing")
+    if cfg == built or cfg.is_relative_to(built) or built.is_relative_to(cfg):
+        raise BuildError(f"--out {cfg} must be outside the build folder {built} (which is only read)")
+    (cfg / "lists").mkdir(parents=True, exist_ok=True)
+    images = built / "images"
+    present = {p.name for p in images.iterdir()}
+    n_lines, missing = 0, []
+    for lst in sorted((built / "lists").glob("*.txt")):
+        names = [Path(line.strip().replace("\\", "/")).name for line in lst.read_text().splitlines() if line.strip()]
+        missing += [n for n in names if n not in present]
+        (cfg / "lists" / lst.name).write_text("".join((images / n).as_posix() + "\n" for n in names))
+        n_lines += len(names)
+    if missing:
+        raise BuildError(f"{len(missing)} listed images are not in {images}, e.g. {sorted(set(missing))[:5]}")
+    yamls = []
+    for y in sorted(built.glob("data*.yaml")):
+        data = yaml.safe_load(y.read_text()) or {}
+        targets = {k: cfg / "lists" / Path(str(data[k]).replace("\\", "/")).name
+                   for k in ("train", "val", "test") if k in data}
+        absent = [str(data[k]) for k, t in targets.items() if not t.is_file()]
+        if absent:
+            if y.name == "data.yaml" or y.name.startswith("data_test_"):
+                raise BuildError(f"{y.name}: lists {absent} are not in {built / 'lists'}")
+            log(f"Skipped {y.name}: lists {absent} are not in {built / 'lists'}")  # e.g. a proxy made elsewhere
+            continue
+        data.update({k: t.as_posix() for k, t in targets.items()})
+        data["path"] = built.as_posix()
+        (cfg / y.name).write_text(yaml.safe_dump(data, sort_keys=False))
+        yamls.append(y.name)
+    with open(built / "split.csv", newline="") as f:
+        rows = list(csv.DictReader(f))
+    if not rows or "file" not in rows[0]:
+        raise BuildError(f"{built / 'split.csv'} has no 'file' column")
+    fields = list(rows[0]) + (["path"] if "path" not in rows[0] else [])
+    with open(cfg / "split.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for r in rows:
+            w.writerow({**r, "path": (images / r["file"]).as_posix()})
+    log(f"Relocated {len(yamls)} yamls, {len(list((built / 'lists').glob('*.txt')))} lists ({n_lines} lines) and "
+        f"split.csv ({len(rows)} rows) into {cfg}; images stay in {images}")
+    return {"built_dir": built.as_posix(), "cfg_dir": cfg.as_posix(), "yamls": yamls, "list_lines": n_lines,
+            "split_rows": len(rows)}
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sources", default=str(REPO / "configs" / "gen2" / "sources.yaml"))
-    ap.add_argument("--out", required=True, help="output folder (empty, or a previous build to replace)")
+    ap.add_argument("--out", required=True, help="output folder (empty, or a previous build to replace); with "
+                    "--relocate-from: the folder for the rewritten yamls, lists and split.csv")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max-side", type=int, default=1280, help="long side of written images, in pixels")
     ap.add_argument("--search-root", help="where the source folders are searched (default: the project root)")
     ap.add_argument("--max-images", type=int, help="at most this many images per source (quick tests)")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--relocate-from", help="a finished build (may be read-only); rewrite its yamls, lists and "
+                    "split.csv into --out instead of building")
     args = ap.parse_args(argv)
+    if args.relocate_from:
+        try:
+            return relocate(args.relocate_from, args.out)
+        except BuildError as e:
+            sys.exit(f"Error: {e}")
     try:
         report = build(args.sources, args.out, args.seed, args.max_side, args.search_root, args.max_images,
                        args.workers)
