@@ -167,7 +167,7 @@ The earlier plan listed `Garbage_dataset_PlusYaml` as a candidate. It was droppe
 | 2026-10-07 | DWSD (Mendeley gr99ny6b8p, Kolkata streets and parks) is used only as a held-out "India real-world" test set: all 784 images go to test. It is uploaded to Kaggle as a private dataset. |
 | 2026-10-07 | `Garbage_dataset_PlusYaml` is dropped: mostly studio and web images, Roboflow augmentation copies, train/test leakage and label errors. |
 | 2026-10-07 | An OTHER class is added: 7 classes, BIODEGRADABLE, CARDBOARD, GLASS, METAL, PAPER, PLASTIC, OTHER. Gen 1's six keep their indices. Gen 1 vs Gen 2 comparisons use the six shared classes. |
-| 2026-10-07 | Training image size is 640. The builder stores images with a long side of at most 1280 px. |
+| 2026-10-07 | Training image size is 640. The builder stores images with a long side of at most 640 px (the training size), so data loading stays fast; a later generation that trains larger rebuilds the data. |
 | 2026-10-07 | Gen 1 is subsampled to about 3,000 train and 900 val images (stratified by class, seeded); all 1,046 Gen 1 test images stay test, and Gen 1 split assignments still come from `configs/split.csv`. |
 | 2026-10-07 | Domains: Gen 1 → `studio`; TACO and HITL → `real_world`; DWSD → `india`. Each has its own test list and yaml. |
 | 2026-10-07 | Licences recorded per source: TACO CC BY 4.0, HITL CC0, DWSD CC BY 4.0, Gen 1 CC BY 4.0. |
