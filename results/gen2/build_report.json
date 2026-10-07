@@ -1,0 +1,917 @@
+{
+  "classes": [
+    "BIODEGRADABLE",
+    "CARDBOARD",
+    "GLASS",
+    "METAL",
+    "PAPER",
+    "PLASTIC",
+    "OTHER"
+  ],
+  "settings": {
+    "seed": 42,
+    "max_side": 640,
+    "search_root": "/kaggle/input",
+    "max_images": null,
+    "sources_yaml": "/kaggle/working/SwarmSort/configs/gen2/sources.yaml",
+    "out": "/kaggle/working/gen2_data",
+    "jpeg_quality": 92,
+    "split_fractions": {
+      "train": 0.7,
+      "valid": 0.2,
+      "test": 0.1
+    },
+    "near_duplicate_rules": {
+      "dhash_size": 16,
+      "near_dup_max_bits": 10,
+      "candidate_max_bits": 40,
+      "min_thumb_corr": 0.9
+    }
+  },
+  "totals": {
+    "train": {
+      "images": 6292,
+      "boxes": 27745,
+      "background_images": 0,
+      "images_per_class": {
+        "BIODEGRADABLE": 671,
+        "CARDBOARD": 982,
+        "GLASS": 1016,
+        "METAL": 1046,
+        "PAPER": 861,
+        "PLASTIC": 2138,
+        "OTHER": 527
+      },
+      "boxes_per_class": {
+        "BIODEGRADABLE": 14415,
+        "CARDBOARD": 1873,
+        "GLASS": 2751,
+        "METAL": 2292,
+        "PAPER": 1542,
+        "PLASTIC": 3792,
+        "OTHER": 1080
+      }
+    },
+    "valid": {
+      "images": 1841,
+      "boxes": 8576,
+      "background_images": 0,
+      "images_per_class": {
+        "BIODEGRADABLE": 196,
+        "CARDBOARD": 295,
+        "GLASS": 301,
+        "METAL": 314,
+        "PAPER": 252,
+        "PLASTIC": 606,
+        "OTHER": 155
+      },
+      "boxes_per_class": {
+        "BIODEGRADABLE": 4203,
+        "CARDBOARD": 632,
+        "GLASS": 774,
+        "METAL": 931,
+        "PAPER": 500,
+        "PLASTIC": 1217,
+        "OTHER": 319
+      }
+    },
+    "test": {
+      "images": 1514,
+      "boxes": 8192,
+      "background_images": 0,
+      "images_per_class": {
+        "BIODEGRADABLE": 231,
+        "CARDBOARD": 229,
+        "GLASS": 302,
+        "METAL": 255,
+        "PAPER": 229,
+        "PLASTIC": 385,
+        "OTHER": 65
+      },
+      "boxes_per_class": {
+        "BIODEGRADABLE": 4532,
+        "CARDBOARD": 474,
+        "GLASS": 881,
+        "METAL": 681,
+        "PAPER": 575,
+        "PLASTIC": 917,
+        "OTHER": 132
+      }
+    }
+  },
+  "domains": {
+    "real_world": {
+      "train": {
+        "images": 3292,
+        "boxes": 5539,
+        "background_images": 0,
+        "images_per_class": {
+          "BIODEGRADABLE": 11,
+          "CARDBOARD": 549,
+          "GLASS": 246,
+          "METAL": 495,
+          "PAPER": 352,
+          "PLASTIC": 1715,
+          "OTHER": 527
+        },
+        "boxes_per_class": {
+          "BIODEGRADABLE": 12,
+          "CARDBOARD": 593,
+          "GLASS": 349,
+          "METAL": 677,
+          "PAPER": 398,
+          "PLASTIC": 2430,
+          "OTHER": 1080
+        }
+      },
+      "valid": {
+        "images": 941,
+        "boxes": 1672,
+        "background_images": 0,
+        "images_per_class": {
+          "BIODEGRADABLE": 2,
+          "CARDBOARD": 169,
+          "GLASS": 72,
+          "METAL": 147,
+          "PAPER": 101,
+          "PLASTIC": 482,
+          "OTHER": 155
+        },
+        "boxes_per_class": {
+          "BIODEGRADABLE": 2,
+          "CARDBOARD": 185,
+          "GLASS": 104,
+          "METAL": 200,
+          "PAPER": 118,
+          "PLASTIC": 744,
+          "OTHER": 319
+        }
+      },
+      "test": {
+        "images": 468,
+        "boxes": 779,
+        "background_images": 0,
+        "images_per_class": {
+          "BIODEGRADABLE": 1,
+          "CARDBOARD": 79,
+          "GLASS": 34,
+          "METAL": 70,
+          "PAPER": 48,
+          "PLASTIC": 247,
+          "OTHER": 65
+        },
+        "boxes_per_class": {
+          "BIODEGRADABLE": 1,
+          "CARDBOARD": 82,
+          "GLASS": 59,
+          "METAL": 93,
+          "PAPER": 48,
+          "PLASTIC": 364,
+          "OTHER": 132
+        }
+      }
+    },
+    "studio": {
+      "train": {
+        "images": 3000,
+        "boxes": 22206,
+        "background_images": 0,
+        "images_per_class": {
+          "BIODEGRADABLE": 660,
+          "CARDBOARD": 433,
+          "GLASS": 770,
+          "METAL": 551,
+          "PAPER": 509,
+          "PLASTIC": 423,
+          "OTHER": 0
+        },
+        "boxes_per_class": {
+          "BIODEGRADABLE": 14403,
+          "CARDBOARD": 1280,
+          "GLASS": 2402,
+          "METAL": 1615,
+          "PAPER": 1144,
+          "PLASTIC": 1362,
+          "OTHER": 0
+        }
+      },
+      "valid": {
+        "images": 900,
+        "boxes": 6904,
+        "background_images": 0,
+        "images_per_class": {
+          "BIODEGRADABLE": 194,
+          "CARDBOARD": 126,
+          "GLASS": 229,
+          "METAL": 167,
+          "PAPER": 151,
+          "PLASTIC": 124,
+          "OTHER": 0
+        },
+        "boxes_per_class": {
+          "BIODEGRADABLE": 4201,
+          "CARDBOARD": 447,
+          "GLASS": 670,
+          "METAL": 731,
+          "PAPER": 382,
+          "PLASTIC": 473,
+          "OTHER": 0
+        }
+      },
+      "test": {
+        "images": 1046,
+        "boxes": 7413,
+        "background_images": 0,
+        "images_per_class": {
+          "BIODEGRADABLE": 230,
+          "CARDBOARD": 150,
+          "GLASS": 268,
+          "METAL": 185,
+          "PAPER": 181,
+          "PLASTIC": 138,
+          "OTHER": 0
+        },
+        "boxes_per_class": {
+          "BIODEGRADABLE": 4531,
+          "CARDBOARD": 392,
+          "GLASS": 822,
+          "METAL": 588,
+          "PAPER": 527,
+          "PLASTIC": 553,
+          "OTHER": 0
+        }
+      }
+    }
+  },
+  "sources": {
+    "garbage_detection": {
+      "format": "yolo",
+      "domain": "studio",
+      "licence": "CC BY 4.0 (Roboflow material-identification/garbage-classification-3 v2)",
+      "location": "/kaggle/input/datasets/viswaprakash1990/garbage-detection/GARBAGE CLASSIFICATION",
+      "class_map": {
+        "BIODEGRADABLE": "BIODEGRADABLE",
+        "CARDBOARD": "CARDBOARD",
+        "GLASS": "GLASS",
+        "METAL": "METAL",
+        "PAPER": "PAPER",
+        "PLASTIC": "PLASTIC"
+      },
+      "images_found": 10464,
+      "images_sampled": 10464,
+      "images_kept": 4946,
+      "images_excluded_as_cross_split_duplicates": 0,
+      "images_dropped": {},
+      "annotations_dropped": {},
+      "label_issues": {
+        "zero_size_boxes": 17
+      },
+      "warnings": {},
+      "keep_split_csv": {
+        "csv": "/kaggle/working/SwarmSort/configs/split.csv",
+        "csv_rows": 10464,
+        "pinned_images": 10464,
+        "images_not_in_csv": 0,
+        "csv_rows_not_in_source": 0
+      },
+      "force_split": null,
+      "subsample": {
+        "seed": 42,
+        "train": {
+          "requested": 3000,
+          "before": 7324,
+          "after": 3000,
+          "dominant_class_before": {
+            "BIODEGRADABLE": 1576,
+            "CARDBOARD": 1028,
+            "GLASS": 1812,
+            "METAL": 882,
+            "PAPER": 1202,
+            "PLASTIC": 824
+          },
+          "dominant_class_after": {
+            "BIODEGRADABLE": 646,
+            "CARDBOARD": 421,
+            "GLASS": 742,
+            "METAL": 361,
+            "PAPER": 492,
+            "PLASTIC": 338
+          }
+        },
+        "valid": {
+          "requested": 900,
+          "before": 2094,
+          "after": 900,
+          "dominant_class_before": {
+            "BIODEGRADABLE": 444,
+            "CARDBOARD": 290,
+            "GLASS": 518,
+            "METAL": 252,
+            "PAPER": 351,
+            "PLASTIC": 239
+          },
+          "dominant_class_after": {
+            "BIODEGRADABLE": 191,
+            "CARDBOARD": 125,
+            "GLASS": 222,
+            "METAL": 108,
+            "PAPER": 151,
+            "PLASTIC": 103
+          }
+        }
+      },
+      "kaggle": "viswaprakash1990/garbage-detection",
+      "optional": false,
+      "splits": {
+        "train": {
+          "images": 3000,
+          "boxes": 22206,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 660,
+            "CARDBOARD": 433,
+            "GLASS": 770,
+            "METAL": 551,
+            "PAPER": 509,
+            "PLASTIC": 423,
+            "OTHER": 0
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 14403,
+            "CARDBOARD": 1280,
+            "GLASS": 2402,
+            "METAL": 1615,
+            "PAPER": 1144,
+            "PLASTIC": 1362,
+            "OTHER": 0
+          }
+        },
+        "valid": {
+          "images": 900,
+          "boxes": 6904,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 194,
+            "CARDBOARD": 126,
+            "GLASS": 229,
+            "METAL": 167,
+            "PAPER": 151,
+            "PLASTIC": 124,
+            "OTHER": 0
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 4201,
+            "CARDBOARD": 447,
+            "GLASS": 670,
+            "METAL": 731,
+            "PAPER": 382,
+            "PLASTIC": 473,
+            "OTHER": 0
+          }
+        },
+        "test": {
+          "images": 1046,
+          "boxes": 7413,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 230,
+            "CARDBOARD": 150,
+            "GLASS": 268,
+            "METAL": 185,
+            "PAPER": 181,
+            "PLASTIC": 138,
+            "OTHER": 0
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 4531,
+            "CARDBOARD": 392,
+            "GLASS": 822,
+            "METAL": 588,
+            "PAPER": 527,
+            "PLASTIC": 553,
+            "OTHER": 0
+          }
+        }
+      }
+    },
+    "taco": {
+      "format": "coco",
+      "domain": "real_world",
+      "licence": "CC BY 4.0 (TACO, Proenca and Simoes 2020, Zenodo 10.5281/zenodo.3587843)",
+      "location": "/kaggle/input/datasets/kneroma/tacotrashdataset/data/annotations.json",
+      "class_map": {
+        "Aluminium foil": "METAL",
+        "Battery": "OTHER",
+        "Aluminium blister pack": "OTHER",
+        "Carded blister pack": "OTHER",
+        "Other plastic bottle": "PLASTIC",
+        "Clear plastic bottle": "PLASTIC",
+        "Glass bottle": "GLASS",
+        "Plastic bottle cap": "PLASTIC",
+        "Metal bottle cap": "METAL",
+        "Broken glass": "GLASS",
+        "Food Can": "METAL",
+        "Aerosol": "METAL",
+        "Drink can": "METAL",
+        "Toilet tube": "CARDBOARD",
+        "Other carton": "CARDBOARD",
+        "Egg carton": "CARDBOARD",
+        "Drink carton": "CARDBOARD",
+        "Corrugated carton": "CARDBOARD",
+        "Meal carton": "CARDBOARD",
+        "Pizza box": "CARDBOARD",
+        "Paper cup": "PAPER",
+        "Disposable plastic cup": "PLASTIC",
+        "Foam cup": "PLASTIC",
+        "Glass cup": "GLASS",
+        "Other plastic cup": "PLASTIC",
+        "Food waste": "BIODEGRADABLE",
+        "Glass jar": "GLASS",
+        "Plastic lid": "PLASTIC",
+        "Metal lid": "METAL",
+        "Other plastic": "PLASTIC",
+        "Magazine paper": "PAPER",
+        "Tissues": "PAPER",
+        "Wrapping paper": "PAPER",
+        "Normal paper": "PAPER",
+        "Paper bag": "PAPER",
+        "Plastified paper bag": "PAPER",
+        "Plastic film": "PLASTIC",
+        "Six pack rings": "PLASTIC",
+        "Garbage bag": "OTHER",
+        "Other plastic wrapper": "PLASTIC",
+        "Single-use carrier bag": "PLASTIC",
+        "Polypropylene bag": "PLASTIC",
+        "Crisp packet": "PLASTIC",
+        "Spread tub": "PLASTIC",
+        "Tupperware": "PLASTIC",
+        "Disposable food container": "PLASTIC",
+        "Foam food container": "PLASTIC",
+        "Other plastic container": "PLASTIC",
+        "Plastic glooves": "PLASTIC",
+        "Plastic utensils": "PLASTIC",
+        "Pop tab": "METAL",
+        "Rope & strings": "OTHER",
+        "Scrap metal": "METAL",
+        "Shoe": "OTHER",
+        "Squeezable tube": "PLASTIC",
+        "Plastic straw": "PLASTIC",
+        "Paper straw": "PAPER",
+        "Styrofoam piece": "PLASTIC",
+        "Unlabeled litter": "OTHER",
+        "Cigarette": "OTHER"
+      },
+      "images_found": 1500,
+      "images_sampled": 1500,
+      "images_kept": 1500,
+      "images_excluded_as_cross_split_duplicates": 0,
+      "images_dropped": {},
+      "annotations_dropped": {},
+      "label_issues": {},
+      "warnings": {
+        "clipped_boxes": 7,
+        "downscaled_images": 1500,
+        "exif_rotated_images": 153,
+        "orientation_frame_assumed_display": 1
+      },
+      "keep_split_csv": null,
+      "force_split": null,
+      "subsample": null,
+      "kaggle": "kneroma/tacotrashdataset",
+      "optional": false,
+      "splits": {
+        "train": {
+          "images": 1050,
+          "boxes": 3293,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 6,
+            "CARDBOARD": 129,
+            "GLASS": 65,
+            "METAL": 199,
+            "PAPER": 128,
+            "PLASTIC": 792,
+            "OTHER": 333
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 7,
+            "CARDBOARD": 173,
+            "GLASS": 167,
+            "METAL": 381,
+            "PAPER": 174,
+            "PLASTIC": 1505,
+            "OTHER": 886
+          }
+        },
+        "valid": {
+          "images": 301,
+          "boxes": 1031,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 1,
+            "CARDBOARD": 42,
+            "GLASS": 21,
+            "METAL": 60,
+            "PAPER": 40,
+            "PLASTIC": 222,
+            "OTHER": 102
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 1,
+            "CARDBOARD": 58,
+            "GLASS": 53,
+            "METAL": 113,
+            "PAPER": 56,
+            "PLASTIC": 484,
+            "OTHER": 266
+          }
+        },
+        "test": {
+          "images": 149,
+          "boxes": 460,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 0,
+            "CARDBOARD": 17,
+            "GLASS": 9,
+            "METAL": 27,
+            "PAPER": 16,
+            "PLASTIC": 115,
+            "OTHER": 41
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 0,
+            "CARDBOARD": 20,
+            "GLASS": 34,
+            "METAL": 50,
+            "PAPER": 16,
+            "PLASTIC": 232,
+            "OTHER": 108
+          }
+        }
+      }
+    },
+    "hitl": {
+      "format": "supervisely",
+      "domain": "real_world",
+      "licence": "CC0 (Humans in the Loop, Recycling dataset)",
+      "location": "/kaggle/input/datasets/humansintheloop/recycling-dataset",
+      "class_map": {
+        "aluminum": "METAL",
+        "celluloseacetate": "OTHER",
+        "glass": "GLASS",
+        "metal": "METAL",
+        "paper": "PAPER",
+        "plastic": "PLASTIC",
+        "polystyrene": "PLASTIC",
+        "rubber": "OTHER",
+        "tetrapak": "CARDBOARD",
+        "textile": "OTHER"
+      },
+      "images_found": 3201,
+      "images_sampled": 3201,
+      "images_kept": 3201,
+      "images_excluded_as_cross_split_duplicates": 0,
+      "images_dropped": {},
+      "annotations_dropped": {},
+      "label_issues": {},
+      "warnings": {
+        "downscaled_images": 3004,
+        "exif_rotated_images": 1077,
+        "objects_without_Material_tag": 100,
+        "orientation_frame_assumed_display": 119
+      },
+      "keep_split_csv": null,
+      "force_split": null,
+      "subsample": null,
+      "kaggle": "humansintheloop/recycling-dataset",
+      "optional": false,
+      "splits": {
+        "train": {
+          "images": 2242,
+          "boxes": 2246,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 5,
+            "CARDBOARD": 420,
+            "GLASS": 181,
+            "METAL": 296,
+            "PAPER": 224,
+            "PLASTIC": 923,
+            "OTHER": 194
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 5,
+            "CARDBOARD": 420,
+            "GLASS": 182,
+            "METAL": 296,
+            "PAPER": 224,
+            "PLASTIC": 925,
+            "OTHER": 194
+          }
+        },
+        "valid": {
+          "images": 640,
+          "boxes": 641,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 1,
+            "CARDBOARD": 127,
+            "GLASS": 51,
+            "METAL": 87,
+            "PAPER": 61,
+            "PLASTIC": 260,
+            "OTHER": 53
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 1,
+            "CARDBOARD": 127,
+            "GLASS": 51,
+            "METAL": 87,
+            "PAPER": 62,
+            "PLASTIC": 260,
+            "OTHER": 53
+          }
+        },
+        "test": {
+          "images": 319,
+          "boxes": 319,
+          "background_images": 0,
+          "images_per_class": {
+            "BIODEGRADABLE": 1,
+            "CARDBOARD": 62,
+            "GLASS": 25,
+            "METAL": 43,
+            "PAPER": 32,
+            "PLASTIC": 132,
+            "OTHER": 24
+          },
+          "boxes_per_class": {
+            "BIODEGRADABLE": 1,
+            "CARDBOARD": 62,
+            "GLASS": 25,
+            "METAL": 43,
+            "PAPER": 32,
+            "PLASTIC": 132,
+            "OTHER": 24
+          }
+        }
+      }
+    }
+  },
+  "skipped_sources": {
+    "dwsd": "source 'dwsd': no folder named ['dwsd', 'dswd', 'dense waste', 'gr99ny6b8p'] (or containing one of these names) with json files under /kaggle/input. Attach the Kaggle dataset 'your private upload of Mendeley DWSD (gr99ny6b8p), named e.g. dwsd-india' to the notebook (or fix --search-root / locate)"
+  },
+  "duplicates": {
+    "groups": 962,
+    "images_in_groups": 1954,
+    "cross_source_groups": 0,
+    "matched_pairs": {
+      "identical_md5": 918,
+      "dhash": 1004,
+      "thumb_corr": 26
+    },
+    "pinned_groups_with_conflicting_splits": 0,
+    "excluded_cross_split_copies": [],
+    "examples": [
+      [
+        "garbage_detection__cardboard714_jpg.rf.298d4ea370b7a59b5190d4d2ef787261.jpg",
+        "garbage_detection__cardboard853_jpg.rf.6bc6bd9eafeb08ab35de42ae4f01ea3b.jpg"
+      ],
+      [
+        "garbage_detection__glass154_jpg.rf.928abc503875994d85f0da147ac53d54.jpg",
+        "garbage_detection__glass167_jpg.rf.6719d38fa13a91e58a43ac43bba3f9a8.jpg",
+        "garbage_detection__glass20_jpg.rf.91a326442d51f8a0d1787e54beef1c28.jpg",
+        "garbage_detection__glass2779_jpg.rf.e8af523ef013ea7f769901c02e37adf8.jpg",
+        "garbage_detection__glass282_jpg.rf.87e70e45e82135ae87cdae1972c6ab4a.jpg",
+        "garbage_detection__glass287_jpg.rf.746d26464f75c0bcb981f92bbeca813a.jpg",
+        "garbage_detection__glass2928_jpg.rf.25cbb8d06f8576b1ad3e9cfa7ea5d978.jpg",
+        "garbage_detection__glass314_jpg.rf.c771a43ac9b5da9b18a818acb01613ab.jpg",
+        "garbage_detection__glass357_jpg.rf.93ac68ddb6f905c387ffcadc810b54b0.jpg",
+        "garbage_detection__glass43_jpg.rf.4dc09183ce891e4bcb0dae005ecc8935.jpg",
+        "garbage_detection__glass466_jpg.rf.dff468f056276c86759a87712dc1e8f5.jpg"
+      ],
+      [
+        "garbage_detection__glass1884_jpg.rf.9c3ef664cd673798d34c8425477ee92c.jpg",
+        "garbage_detection__glass1894_jpg.rf.7ddf3bd0ab5bf8cf2d7ba969165fce76.jpg"
+      ],
+      [
+        "garbage_detection__glass224_jpg.rf.9226927aa7b548edf596546bc4ce038c.jpg",
+        "garbage_detection__glass846_jpg.rf.0e69dbf5accf5d73ed7b3950d17d24b8.jpg"
+      ],
+      [
+        "garbage_detection__glass2788_jpg.rf.f4fc72c64cffe7def50743bf09f9966c.jpg",
+        "garbage_detection__glass3048_jpg.rf.60a6eec741b4f2a6ab37b425afd5056a.jpg"
+      ],
+      [
+        "garbage_detection__glass2858_jpg.rf.88751834055e9e17e3131977229ae764.jpg",
+        "garbage_detection__glass3078_jpg.rf.dc788e888dbd189329427704c52f006b.jpg"
+      ],
+      [
+        "garbage_detection__glass48_jpg.rf.3f05d67abf5ce7da98f1bc78b6a93ebf.jpg",
+        "garbage_detection__glass4_jpg.rf.8ce0fdf44b993093023df6d51dee15de.jpg"
+      ],
+      [
+        "garbage_detection__metal100_jpg.rf.8605f3d87c15f6f37575fa2907d5bc6c.jpg",
+        "garbage_detection__metal834_jpg.rf.6aaf1971af2cff81013a8e5101a14b20.jpg"
+      ],
+      [
+        "garbage_detection__metal73_jpg.rf.706087b23b0016d79903eaa8ec628f23.jpg",
+        "garbage_detection__metal812_jpg.rf.016942cfc11df1f5d5c8ee741a47f871.jpg"
+      ],
+      [
+        "garbage_detection__paper1041_jpg.rf.a85979df543f1f06667e8f0c832452fd.jpg",
+        "garbage_detection__paper986_jpg.rf.e15f004a90f51c7022fba01eb29c735b.jpg"
+      ],
+      [
+        "garbage_detection__paper1095_jpg.rf.4625051dd2732618dcc80db20a4798ce.jpg",
+        "garbage_detection__paper1115_jpg.rf.94e9636512384ebbd6d408197e671cc1.jpg"
+      ],
+      [
+        "garbage_detection__paper1565_jpeg.rf.c01a02bf3a965fa0fb310eec464a21e1.jpg",
+        "garbage_detection__paper1664_jpeg.rf.141adb52a7568177f28de95652a4b5f9.jpg"
+      ],
+      [
+        "garbage_detection__plastic179_jpg.rf.12e8a7401ef3b1d1169da3dcedf8ca14.jpg",
+        "garbage_detection__plastic958_jpg.rf.7aca55cf70bcc42ac351f1a82d4ed89d.jpg"
+      ],
+      [
+        "garbage_detection__plastic519_jpg.rf.6dc50ca6108a9d9f6ab84aa836d9a80e.jpg",
+        "garbage_detection__plastic52_jpg.rf.a38f445d4e0060337b27aaf163372dbd.jpg"
+      ],
+      [
+        "hitl__ds0_1000.jpg",
+        "hitl__ds0_2291.jpg"
+      ],
+      [
+        "hitl__ds0_1002.jpg",
+        "hitl__ds0_IMG_20221215_161418.jpg"
+      ],
+      [
+        "hitl__ds0_1008.jpg",
+        "hitl__ds0_57.jpg"
+      ],
+      [
+        "hitl__ds0_1010.jpg",
+        "hitl__ds0_2096.jpg",
+        "hitl__ds0_35.jpg",
+        "hitl__ds0_can-696583__340.jpg",
+        "hitl__ds0_litter_113.jpg"
+      ],
+      [
+        "hitl__ds0_1011.jpg",
+        "hitl__ds0_20221216_175314.jpg"
+      ],
+      [
+        "hitl__ds0_1012.jpg",
+        "hitl__ds0_litter_146.jpg"
+      ],
+      [
+        "hitl__ds0_1013.jpg",
+        "hitl__ds0_1036.jpg"
+      ],
+      [
+        "hitl__ds0_1014.jpg",
+        "hitl__ds0_20221216_095313.jpg"
+      ],
+      [
+        "hitl__ds0_1015.jpg",
+        "hitl__ds0_1991.jpg",
+        "hitl__ds0_bottle-3387021__340.jpg"
+      ],
+      [
+        "hitl__ds0_1016.jpg",
+        "hitl__ds0_1740.jpg"
+      ],
+      [
+        "hitl__ds0_1019.jpg",
+        "hitl__ds0_1597.jpg"
+      ],
+      [
+        "hitl__ds0_1021.jpg",
+        "hitl__ds0_1284.jpg"
+      ],
+      [
+        "hitl__ds0_1022.jpg",
+        "hitl__ds0_litter_153.jpg"
+      ],
+      [
+        "hitl__ds0_1023.jpg",
+        "hitl__ds0_IMG_20221215_152429.jpg"
+      ],
+      [
+        "hitl__ds0_1025.jpg",
+        "hitl__ds0_1885.jpg"
+      ],
+      [
+        "hitl__ds0_1029.jpg",
+        "hitl__ds0_468.jpg"
+      ],
+      [
+        "hitl__ds0_1031.jpg",
+        "hitl__ds0_IMG_20221215_162351.jpg"
+      ],
+      [
+        "hitl__ds0_1033.jpg",
+        "hitl__ds0_1766.jpg"
+      ],
+      [
+        "hitl__ds0_1035.jpg",
+        "hitl__ds0_473.jpg"
+      ],
+      [
+        "hitl__ds0_1039.jpg",
+        "hitl__ds0_20221214_162224.jpg"
+      ],
+      [
+        "hitl__ds0_104.jpg",
+        "hitl__ds0_20221216_101404.jpg"
+      ],
+      [
+        "hitl__ds0_1041.jpg",
+        "hitl__ds0_1434.jpg"
+      ],
+      [
+        "hitl__ds0_1043.jpg",
+        "hitl__ds0_20221216_085231.jpg"
+      ],
+      [
+        "hitl__ds0_1044.jpg",
+        "hitl__ds0_IMG_20221215_162615.jpg"
+      ],
+      [
+        "hitl__ds0_1045.jpg",
+        "hitl__ds0_IMG_20221215_152716_1.jpg"
+      ],
+      [
+        "hitl__ds0_1046.jpg",
+        "hitl__ds0_litter_123.jpg"
+      ],
+      [
+        "hitl__ds0_1048.jpg",
+        "hitl__ds0_IMG_20221215_162546.jpg"
+      ],
+      [
+        "hitl__ds0_105.jpg",
+        "hitl__ds0_IMG_20221215_161525.jpg"
+      ],
+      [
+        "hitl__ds0_1050.jpg",
+        "hitl__ds0_IMG_20221215_162052.jpg"
+      ],
+      [
+        "hitl__ds0_1052.jpg",
+        "hitl__ds0_20221216_122258.jpg"
+      ],
+      [
+        "hitl__ds0_1053.jpg",
+        "hitl__ds0_1464.jpg"
+      ],
+      [
+        "hitl__ds0_1055.jpg",
+        "hitl__ds0_20221216_095810.jpg"
+      ],
+      [
+        "hitl__ds0_1056.jpg",
+        "hitl__ds0_IMG_20221215_162905.jpg"
+      ],
+      [
+        "hitl__ds0_1058.jpg",
+        "hitl__ds0_1063.jpg"
+      ],
+      [
+        "hitl__ds0_1059.jpg",
+        "hitl__ds0_20221216_100438.jpg"
+      ],
+      [
+        "hitl__ds0_106.jpg",
+        "hitl__ds0_IMG_20221215_161536.jpg"
+      ]
+    ]
+  },
+  "test_variants": {
+    "real_world": {
+      "yaml": "data_test_real_world.yaml",
+      "test_images": 468
+    },
+    "studio": {
+      "yaml": "data_test_studio.yaml",
+      "test_images": 1046
+    },
+    "src_garbage_detection": {
+      "yaml": "data_test_src_garbage_detection.yaml",
+      "test_images": 1046
+    },
+    "src_hitl": {
+      "yaml": "data_test_src_hitl.yaml",
+      "test_images": 319
+    },
+    "src_taco": {
+      "yaml": "data_test_src_taco.yaml",
+      "test_images": 149
+    }
+  },
+  "warnings": [
+    "optional source 'dwsd' was not found and is NOT in this build: source 'dwsd': no folder named ['dwsd', 'dswd', 'dense waste', 'gr99ny6b8p'] (or containing one of these names) with json files under /kaggle/input. Attach the Kaggle dataset 'your private upload of Mendeley DWSD (gr99ny6b8p), named e.g. dwsd-india' to the notebook (or fix --search-root / locate)"
+  ]
+}
