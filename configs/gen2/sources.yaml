@@ -1,0 +1,152 @@
+# Generation 2 dataset sources, read by src/build_dataset.py.
+#
+#   python src/build_dataset.py --sources configs/gen2/sources.yaml --out <dir> --seed 42
+#
+# FIRST DRAFT. The plusyaml and taco class mappings are placeholders until the source research is finished.
+#
+# Top-level fields
+#   classes   target class names, in index order. Add OTHER as a 7th name to enable an "other waste" class;
+#             class_map values may then use OTHER.
+#   sources   list of datasets to merge, fields below.
+#
+# Source fields
+#   name            short id (letters, digits, _ or -). Prefixes every output file: <name>__<image>.jpg
+#   enabled         false = skipped (its class_map may then be an unfinished placeholder)
+#   format          yolo | coco
+#   locate          folder name(s) searched under --search-root (default: the project root), up to 7 levels deep,
+#                   so Kaggle's /kaggle/input/datasets/<owner>/<slug>/... nesting is found. Names are compared
+#                   ignoring case, spaces, '-' and '_'. Required for yolo; optional for coco (narrows the search).
+#   names_file      yolo only: the yaml with the class names, relative to the found folder
+#                   (default: data.yaml in the folder or its parent)
+#   annotations     coco only: annotations json file name or relative path (e.g. data/annotations.json)
+#   images_dir      coco only: image folder relative to the json's folder (default: the json's folder);
+#                   each image's file_name is resolved inside it
+#   class_field     coco only: name (default) or supercategory: which category field class_map keys refer to
+#   box_frame       coco only: auto (default) | display | raw. Whether boxes refer to the photo after EXIF
+#                   rotation (display, TACO's convention) or to the stored pixels (raw). auto decides per image
+#                   from the recorded width/height and assumes display when they cannot tell.
+#   class_map       source class name -> target class name | drop_annotation | drop_image.
+#                     drop_annotation  remove that box, keep the image
+#                     drop_image       remove every image containing that class
+#                   Every source class must be listed; an unmapped or unknown name is an error.
+#   domain          studio | real_world (any short id works): per-domain test lists and data_test_<domain>.yaml
+#   licence         recorded in build_report.json
+#   keep_split_csv  optional: a split csv (columns split, file) whose assignment this source keeps, so Gen 1 test
+#                   images stay test. Relative paths are resolved from the project root.
+#   max_images      optional: use at most this many images of the source (seeded sample, for quick tests)
+#   keep_empty      optional, default false: keep images that have no boxes as background images.
+#                   Images that lose all their boxes through drop_annotation are always removed.
+
+classes: [BIODEGRADABLE, CARDBOARD, GLASS, METAL, PAPER, PLASTIC]
+
+sources:
+  # Gen 1 dataset (Kaggle viswaprakash1990/garbage-detection), 416x416 studio-style photos.
+  - name: garbage_detection
+    enabled: true
+    format: yolo
+    locate: ["GARBAGE CLASSIFICATION", "garbage-detection"]
+    class_map:
+      BIODEGRADABLE: BIODEGRADABLE
+      CARDBOARD: CARDBOARD
+      GLASS: GLASS
+      METAL: METAL
+      PAPER: PAPER
+      PLASTIC: PLASTIC
+    domain: studio
+    licence: "CC BY 4.0 (Roboflow material-identification/garbage-classification-3 v2)"
+    keep_split_csv: configs/split.csv
+    keep_empty: true   # Gen 1 kept images whose only boxes were zero-size, so its test set stays identical
+
+  # Garbage_dataset_PlusYaml (local folder), 7 classes, YOLO labels (some as polygons, converted to boxes).
+  # PLACEHOLDER MAPPING, pending the source research. In particular: does Organic match BIODEGRADABLE, and
+  # should Electronics / Miscellaneous become OTHER instead of being dropped?
+  - name: plusyaml
+    enabled: true
+    format: yolo
+    locate: ["Garbage_dataset_PlusYaml"]
+    class_map:
+      Paper: PAPER
+      Plastic: PLASTIC
+      Glass: GLASS
+      Metal: METAL
+      Organic: BIODEGRADABLE
+      Electronics: drop_image        # placeholder
+      Miscellaneous: drop_annotation # placeholder
+    domain: studio                   # placeholder: check whether its photos are studio or real-world
+    licence: "unknown - to be confirmed"
+
+  # TACO (COCO format, 60 categories in 28 supercategories, high-resolution phone photos with EXIF orientation).
+  # Disabled until the research fills in the mapping. Typical layouts: annotations.json next to batch_1/ ...
+  # batch_15/ folders (file_name "batch_1/000006.jpg"), or the same inside a data/ folder.
+  - name: taco
+    enabled: false
+    format: coco
+    locate: ["TACO", "tacotrashdataset"]
+    annotations: annotations.json
+    class_field: name
+    box_frame: auto
+    domain: real_world
+    licence: "CC BY 4.0 (TACO, Proenca and Simoes 2020) - to be confirmed for the chosen mirror"
+    class_map: {}
+    # PLACEHOLDER: every TACO category name must be mapped. Check the exact spelling in annotations.json.
+    # class_map:
+    #   Aluminium foil: ?
+    #   Battery: ?
+    #   Aluminium blister pack: ?
+    #   Carded blister pack: ?
+    #   Other plastic bottle: ?
+    #   Clear plastic bottle: ?
+    #   Glass bottle: ?
+    #   Plastic bottle cap: ?
+    #   Metal bottle cap: ?
+    #   Broken glass: ?
+    #   Food Can: ?
+    #   Aerosol: ?
+    #   Drink can: ?
+    #   Toilet tube: ?
+    #   Other carton: ?
+    #   Egg carton: ?
+    #   Drink carton: ?
+    #   Corrugated carton: ?
+    #   Meal carton: ?
+    #   Pizza box: ?
+    #   Paper cup: ?
+    #   Disposable plastic cup: ?
+    #   Foam cup: ?
+    #   Glass cup: ?
+    #   Other plastic cup: ?
+    #   Food waste: ?
+    #   Glass jar: ?
+    #   Plastic lid: ?
+    #   Metal lid: ?
+    #   Other plastic: ?
+    #   Magazine paper: ?
+    #   Tissues: ?
+    #   Wrapping paper: ?
+    #   Normal paper: ?
+    #   Paper bag: ?
+    #   Plastified paper bag: ?
+    #   Plastic film: ?
+    #   Six pack rings: ?
+    #   Garbage bag: ?
+    #   Other plastic wrapper: ?
+    #   Single-use carrier bag: ?
+    #   Polypropylene bag: ?
+    #   Crisp packet: ?
+    #   Spread tub: ?
+    #   Tupperware: ?
+    #   Disposable food container: ?
+    #   Foam food container: ?
+    #   Other plastic container: ?
+    #   Plastic glooves: ?
+    #   Plastic utensils: ?
+    #   Pop tab: ?
+    #   Rope & strings: ?
+    #   Scrap metal: ?
+    #   Shoe: ?
+    #   Squeezable tube: ?
+    #   Plastic straw: ?
+    #   Paper straw: ?
+    #   Styrofoam piece: ?
+    #   Unlabeled litter: ?
+    #   Cigarette: ?
