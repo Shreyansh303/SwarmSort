@@ -2,6 +2,8 @@
 GARBAGE CLASSIFICATION/
 Garbage_dataset_PlusYaml/
 data/
+DSWD/
+DWSD/
 
 # Reference material
 *.pdf

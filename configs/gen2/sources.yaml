@@ -7,8 +7,8 @@
 #   viswaprakash1990/garbage-detection   Gen 1, folder "GARBAGE CLASSIFICATION"
 #   kneroma/tacotrashdataset             TACO, data/annotations.json + data/batch_1..15/
 #   humansintheloop/recycling-dataset    HITL Recycling, Supervisely project (<dataset>/ann + <dataset>/img, meta.json)
-#   <your private DWSD dataset>          DWSD: upload the contents of the Mendeley zip (gr99ny6b8p, DSWD.zip) as a
-#                                        private Kaggle dataset whose name contains "dwsd" (e.g. "dwsd-india").
+#   shreyanshjain30/dwsd-india-waste     DWSD: a private Kaggle upload of the Mendeley zip (gr99ny6b8p, DSWD.zip);
+#                                        found by its DSWD (or DWSD) folder holding Train/ and Test/.
 #                                        Optional: without it the build goes on, with a loud warning.
 #
 # Top-level fields
@@ -18,7 +18,7 @@
 # Source fields
 #   name            short id (letters, digits, _ or -). Prefixes every output file: <name>__<image>.jpg
 #   enabled         false = skipped (its class_map may then be an unfinished placeholder)
-#   format          yolo | coco | supervisely | labelme
+#   format          yolo | coco | supervisely | labelme | semantic_mask
 #   locate          folder name(s) searched under --search-root (default: the project root), up to 7 levels deep,
 #                   so Kaggle's /kaggle/input/datasets/<owner>/<slug>/... nesting is found. Names are compared
 #                   ignoring case, spaces, '-' and '_'. Required except for coco (where it narrows the search).
@@ -38,6 +38,16 @@
 #                   object's class title. class_map keys are then the tag's values.
 #   tag_overrides   supervisely only: {tag: {value: target}}, checked first, in order (e.g. Object: cigarettebutt)
 #   untagged        supervisely only, needed with class_from_tag: the target of an object without that tag
+#   image_dirs      semantic_mask only: photo folders relative to the located folder (folder names match ignoring case)
+#   mask_dirs       semantic_mask only: the mask folders, paired in order with image_dirs. A photo and its mask pair
+#                   by file stem after removing image_prefix / mask_prefix; an unpaired file is an error.
+#   image_prefix, mask_prefix   semantic_mask only: stem prefixes removed before pairing (e.g. img_ and mask_)
+#   mask_values     semantic_mask only: {pixel value: source class name}; class_map then maps these names.
+#                   A value found in a mask that is in neither mask_values nor ignore_values is an error.
+#   ignore_values   semantic_mask only: pixel values that are not objects (default [0], background)
+#   min_box_area    semantic_mask only: connected regions smaller than this many mask pixels are dropped (default 50)
+#   connectivity    semantic_mask only: 8 (default) or 4, the pixel neighbourhood of a connected region. Each region
+#                   of one value is one box, so touching objects of the same class merge into one box.
 #   class_map       source class name -> target class name | drop_annotation | drop_and_mask | drop_image.
 #                     drop_annotation  remove that box, keep the image
 #                     drop_and_mask    remove that box and paint its region mid-grey (114), so the unlabelled
@@ -197,42 +207,69 @@ sources:
       tetrapak: CARDBOARD
       textile: OTHER
 
-  # DWSD (Dense Waste Segmentation Dataset, Mendeley gr99ny6b8p), 784 photos of streets and parks in Kolkata,
-  # Labelme polygons in 14 classes. Used ONLY as the held-out "India real-world" test set: all images go to test.
-  # The user uploads the contents of the Mendeley zip as a private Kaggle dataset; any folder whose name contains
-  # "dwsd", "dswd" or "dense waste" is found. The exact label spellings are not published, so spelling variants
-  # are listed (labels are matched ignoring case, spaces and punctuation); an unknown label stops the build and
-  # names it.
+  # DWSD (Dense Waste Segmentation Dataset, Mendeley gr99ny6b8p; Ali et al., Data in Brief 2025,
+  # doi 10.1016/j.dib.2025.111340), 784 photos (448x448 PNG) of streets and parks around Kolkata. Used ONLY as the
+  # held-out "India real-world" test set: all images go to test. The download (DSWD.zip) holds DSWD/Train/{Image,Mask}
+  # (640) and DSWD/Test/{Image,Mask} (144): img_<n>.png with a grey-level mask_<n>.png whose pixel values 0-15 are
+  # classes. Every connected region of one value becomes one box; regions under 50 pixels are dropped (counted in
+  # build_report.json as tiny_region:<class>). Known limitation: touching objects of the same class form one region
+  # and merge into one box, so DWSD has fewer, larger boxes than a per-instance annotation would.
+  #
+  # Mask value -> class: the paper's Table 3 lists 0 background, 1 plastic container, 2 plastic bottle, 3 thermocol,
+  # 4 metal bottle, 5 plastic cardboard, 6 glass, 7 thermocol plate, 8 plastic, 9 paper, 10 plastic cup, 11 paper
+  # cup, 12 aluminium foil, 13 cloth, 14 nylon, and "0 and 15 background". Its per-value pixel counts match these
+  # masks exactly, but its names do NOT match what the regions show (checked on 16 regions per value, 2026-10-08):
+  # value 6 covers plastic bottles, 14 crumpled foil, 12 clothes, 10 white EPS blocks, and 15 (not background)
+  # covers polythene bags and film in 610 of the 784 masks. The names below are therefore INFERRED from the images;
+  # the paper's name is given in each comment. Uncertain values: 1, 4, 7, 9, 11 and 13 (see the comments).
+  # 81 masks have no class pixels (and 3 more only tiny regions). They are dropped (keep_empty is off): most are empty
+  # ground or walls, but some show plenty of unannotated waste, so they would not be fair "nothing here" test images.
+  # Local build of 2026-10-08: 700 of 784 images kept, 4502 boxes.
+  # The Kaggle upload (shreyanshjain30/dwsd-india-waste, from DSWD.zip) is found by its DSWD folder.
   - name: dwsd
-    format: labelme
-    kaggle: "your private upload of Mendeley DWSD (gr99ny6b8p), named e.g. dwsd-india"
+    format: semantic_mask
+    kaggle: "shreyanshjain30/dwsd-india-waste (private upload of Mendeley DWSD gr99ny6b8p, DSWD.zip)"
     optional: true
-    locate: ["dwsd", "dswd", "dense waste", "gr99ny6b8p"]
-    locate_match: contains
-    box_frame: auto
+    locate: ["DSWD", "DWSD", "dwsd-india-waste"]
+    image_dirs: [Train/Image, Test/Image]
+    mask_dirs: [Train/Mask, Test/Mask]
+    image_prefix: img_
+    mask_prefix: mask_
+    ignore_values: [0]               # background
+    min_box_area: 50                 # pixels of the 448x448 mask
+    connectivity: 8
+    mask_values:                     # inferred from the images; paper's Table 3 name in the comment
+      1: plastic pipe                # paper: plastic container. Straight white pipes/sticks (9 masks). Uncertain
+      2: metal bottles               # paper: plastic bottle. Cylindrical cans (8 masks)
+      3: paper                       # paper: thermocol. Printed paper, newspaper, cartons, paper bags, some boxes
+      4: plastic cardboard           # paper: metal bottle. Flat board/card pieces, a few cup pieces. Uncertain
+      5: plastic                     # paper: plastic cardboard. Woven sacks, plastic sheets, metallised packets
+      6: plastic bottles             # paper: glass. PET bottles
+      7: unknown white item          # paper: thermocol plate. One 494-pixel region at an image edge. Uncertain
+      8: plastic containers          # paper: plastic. Round tubs, bowls, cups seen from above, lids
+      9: cups                        # paper: paper. Paper cups and some clear plastic cups. Uncertain
+      10: thermocol                  # paper: plastic cup. White EPS foam blocks
+      11: thermocol plates           # paper: paper cup. Round white disposable plates. Uncertain (paper plates?)
+      12: cloth                      # paper: aluminium foil. Clothes and fabric
+      13: unknown textile-like       # paper: cloth. Rolled striped or green woven items (12 masks). Uncertain
+      14: aluminium foil             # paper: nylon. Crumpled foil
+      15: nylon                      # paper: background. Polythene bags, plastic film and wrappers (Indian "nylon")
     domain: india
     licence: "CC BY 4.0 (DWSD, Mendeley Data 10.17632/gr99ny6b8p.1)"
     force_split: test
-    allow_unused_map_keys: true
-    class_map:
-      plastic containers: PLASTIC
-      plastic container: PLASTIC
-      plastic bottles: PLASTIC
-      plastic bottle: PLASTIC
-      thermocol: PLASTIC            # EPS
-      thermocol plates: PLASTIC
-      thermocol plate: PLASTIC
-      plastic: PLASTIC
-      plastic cups: PLASTIC
-      plastic cup: PLASTIC
-      nylon: PLASTIC                # Indian usage: polythene bags and sheets
+    class_map:                       # research mapping (dataset_research section 3c) on the inferred names
+      plastic pipe: PLASTIC
       metal bottles: METAL
-      metal bottle: METAL
-      aluminium foil: METAL
-      aluminum foil: METAL
-      glass: GLASS
       paper: PAPER
-      paper cups: PAPER
-      paper cup: PAPER
-      plastic cardboard: CARDBOARD  # ambiguous name: check about 20 samples (coated board -> CARDBOARD)
-      cloth: OTHER
+      plastic cardboard: CARDBOARD
+      plastic: PLASTIC
+      plastic bottles: PLASTIC
+      unknown white item: PLASTIC    # white disposables in DWSD are plastic or EPS
+      plastic containers: PLASTIC
+      cups: PAPER                    # mostly paper cups
+      thermocol: PLASTIC             # EPS
+      thermocol plates: PLASTIC      # EPS
+      cloth: OTHER                   # textile
+      unknown textile-like: OTHER
+      aluminium foil: METAL
+      nylon: PLASTIC                 # polythene

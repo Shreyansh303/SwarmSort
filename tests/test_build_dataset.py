@@ -642,6 +642,99 @@ class LabelmeTests(BuildTestCase):
         self.assertEqual(report["sources"]["dwsd"]["images_kept"], 8)
 
 
+def make_mask_pair(root, split, n, img, mask):
+    """root/<split>/Image/img_<n>.png and root/<split>/Mask/mask_<n>.png (mask: 2-D uint8 array of class values)."""
+    for sub in ("Image", "Mask"):
+        (root / split / sub).mkdir(parents=True, exist_ok=True)
+    img.save(root / split / "Image" / f"img_{n}.png")
+    Image.fromarray(np.asarray(mask, dtype=np.uint8), mode="L").save(root / split / "Mask" / f"mask_{n}.png")
+
+
+def mask_source(**kw):
+    return {"name": "dwsd", "format": "semantic_mask", "locate": ["DSWD", "DWSD"], "domain": "india",
+            "licence": "CC BY 4.0", "force_split": "test", "image_dirs": ["Train/Image", "Test/Image"],
+            "mask_dirs": ["Train/Mask", "Test/Mask"], "image_prefix": "img_", "mask_prefix": "mask_",
+            "ignore_values": [0, 9], "min_box_area": 50, "connectivity": 8,
+            "mask_values": {1: "plastic bottles", 2: "cloth"},
+            "class_map": {"plastic bottles": "PLASTIC", "cloth": "OTHER"}, **kw}
+
+
+class SemanticMaskTests(BuildTestCase):
+    def make_dswd(self):
+        root = self.search / "dwsd-india-waste" / "DSWD"
+        m = np.zeros((100, 200), np.uint8)
+        m[10:30, 20:60] = 1      # bottle, 800 px
+        m[50:90, 120:180] = 1    # a second, separate bottle region -> its own box
+        m[60:66, 10:16] = 1      # 36 px: under min_box_area, dropped
+        m[5:15, 150:190] = 9     # an ignore value: no box
+        m[70:95, 30:70] = 2      # cloth
+        make_mask_pair(root, "Train", 0, noise_image(200, 100, 1), m)
+        for i in range(1, 4):
+            mi = np.zeros((100, 200), np.uint8)
+            mi[20:60, 40:100] = 2
+            make_mask_pair(root, "Train" if i < 3 else "Test", i, noise_image(200, 100, 10 + i), mi)
+        return root
+
+    def test_regions_become_boxes_tiny_and_ignored_dropped(self):
+        self.make_dswd()
+        cfg = write_config(self.tmp / "s.yaml", [mask_source()], classes=SEVEN)
+        out = self.tmp / "out"
+        report = quiet_build(cfg, out, search_root=self.search)
+        boxes = sorted(yolo_to_xyxy(line) for line in
+                       (out / "labels" / "dwsd__Train_Image_img_0.txt").read_text().splitlines())
+        want = [(2, (0.1, 0.1, 0.3, 0.3)), (2, (0.6, 0.5, 0.9, 0.9)), (6, (0.15, 0.7, 0.35, 0.95))]
+        self.assertEqual([c for c, _ in boxes], [c for c, _ in want])  # two bottle regions, one cloth, no 9
+        for (_, got), (_, exp) in zip(boxes, want):
+            for g, e in zip(got, exp):
+                self.assertAlmostEqual(g, e, places=5)
+        s = report["sources"]["dwsd"]
+        self.assertEqual(s["annotations_dropped"], {"tiny_region:plastic bottles": 1})
+        self.assertEqual(s["images_kept"], 4)
+        self.assertEqual(s["format"], "semantic_mask")
+        self.assertTrue(s["location"].endswith("dwsd-india-waste/DSWD"))
+        rows = read_csv(out / "split.csv")
+        self.assertEqual({r["split"] for r in rows}, {"test"})
+        self.assertTrue((out / "data_test_india.yaml").is_file())
+
+    def test_connectivity_four_versus_eight(self):
+        m = np.zeros((20, 20), np.uint8)
+        m[2:8, 2:8] = 1
+        m[8:14, 8:14] = 1  # touches the first square only at a corner
+        eight, _, _ = bd.mask_regions(m, {1: "a"}, {0}, 1, 8)
+        four, _, _ = bd.mask_regions(m, {1: "a"}, {0}, 1, 4)
+        self.assertEqual(eight, [(1, [2.0, 2.0, 12.0, 12.0])])
+        self.assertEqual(sorted(four), [(1, [2.0, 2.0, 6.0, 6.0]), (1, [8.0, 8.0, 6.0, 6.0])])
+
+    def test_value_missing_from_mask_values_is_an_error(self):
+        root = self.make_dswd()
+        m = np.zeros((100, 200), np.uint8)
+        m[10:40, 10:40] = 7
+        make_mask_pair(root, "Test", 9, noise_image(200, 100, 50), m)
+        cfg = write_config(self.tmp / "s.yaml", [mask_source()], classes=SEVEN)
+        with self.assertRaisesRegex(bd.BuildError, r"mask values \[7\] are in neither.*mask_9\.png"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search)
+
+    def test_image_mask_stem_mismatch_is_an_error(self):
+        root = self.make_dswd()
+        noise_image(200, 100, 60).save(root / "Test" / "Image" / "img_77.png")
+        Image.fromarray(np.zeros((100, 200), np.uint8)).save(root / "Test" / "Mask" / "mask_78.png")
+        cfg = write_config(self.tmp / "s.yaml", [mask_source()], classes=SEVEN)
+        with self.assertRaisesRegex(bd.BuildError, r"do not pair up by file stem.*1 images without a mask "
+                                                   r"\['img_77\.png'\].*1 masks without an image \['mask_78\.png'\]"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search)
+
+    def test_mask_config_errors(self):
+        for bad, msg in (({"mask_dirs": ["Train/Mask"]}, "same length"),
+                         ({"mask_values": {1: "a", 300: "b"}}, "integer 0-255"),
+                         ({"ignore_values": [0, 1]}, r"both 'mask_values' and 'ignore_values'"),
+                         ({"connectivity": 6}, "4 or 8"),
+                         ({"min_box_area": 0}, "min_box_area")):
+            with self.assertRaisesRegex(bd.BuildError, msg):
+                bd.load_config(write_config(self.tmp / "s.yaml", [mask_source(**bad)], classes=SEVEN))
+        with self.assertRaisesRegex(bd.BuildError, "cannot be used with format labelme"):
+            bd.load_config(write_config(self.tmp / "s.yaml", [labelme_source(mask_values={1: "a"})], classes=SEVEN))
+
+
 class SourceOptionTests(BuildTestCase):
     def make_pinned_yolo(self):
         """90 train (60 bio, 30 glass), 30 valid (20 plastic, 10 bio), 12 test images, pinned by a split csv."""
@@ -755,6 +848,52 @@ class SourceOptionTests(BuildTestCase):
             quiet_build(write_config(self.tmp / "s.yaml", [taco]), self.tmp / "out3", search_root=self.search)
 
 
+class OnlyTests(BuildTestCase):
+    def test_only_builds_just_the_named_sources(self):
+        self.standard_yolo()
+        LabelmeTests.make_dwsd(self)
+        dwsd = labelme_source(optional=True)
+        cfg = write_config(self.tmp / "s.yaml", [yolo_source(), dwsd], classes=SEVEN)
+        out = self.tmp / "out"
+        logs = []
+        report = bd.build(cfg, out, search_root=self.search, only=["dwsd"], log=logs.append)
+        self.assertEqual(list(report["sources"]), ["dwsd"])
+        rows = read_csv(out / "split.csv")
+        self.assertEqual({r["source"] for r in rows}, {"dwsd"})
+        self.assertEqual({r["split"] for r in rows}, {"test"})
+        india = yaml.safe_load((out / "data_test_india.yaml").read_text())
+        self.assertEqual(india["names"], list(SEVEN))  # the class list of the config, same order
+        self.assertEqual(len((out / "lists" / "test_india.txt").read_text().splitlines()), 8)
+        self.assertFalse((out / "data_test_studio.yaml").exists())
+        self.assertEqual(report["settings"]["only"], ["dwsd"])
+        self.assertTrue(any("--only" in line for line in logs))
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli = bd.main(["--sources", str(cfg), "--out", str(self.tmp / "out_cli"), "--search-root",
+                           str(self.search), "--only", "studio_src"])
+        self.assertEqual(list(cli["sources"]), ["studio_src"])
+
+    def test_only_unknown_or_disabled_name_is_an_error(self):
+        self.standard_yolo()
+        cfg = write_config(self.tmp / "s.yaml", [yolo_source(), coco_source(enabled=False)])
+        with self.assertRaisesRegex(bd.BuildError, r"unknown source\(s\) \['dswd'\].*studio_src"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search, only=["dswd"])
+        with self.assertRaisesRegex(bd.BuildError, "disabled"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search, only=["real_src"])
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
+            bd.main(["--sources", str(cfg), "--out", str(self.tmp / "out"), "--search-root", str(self.search),
+                     "--only", "nope"])
+        self.assertIn("unknown source", str(cm.exception.code))
+
+    def test_only_makes_an_optional_missing_source_required(self):
+        self.standard_yolo()
+        missing = labelme_source(locate=["nowhere"], optional=True, kaggle="me/dwsd-india")
+        cfg = write_config(self.tmp / "s.yaml", [yolo_source(), missing], classes=SEVEN)
+        with self.assertRaisesRegex(bd.SourceMissing, "asked for with --only.*me/dwsd-india"):
+            quiet_build(cfg, self.tmp / "out", search_root=self.search, only=["dwsd"])
+        report = quiet_build(cfg, self.tmp / "out2", search_root=self.search)  # without --only: skipped
+        self.assertIn("dwsd", report["skipped_sources"])
+
+
 class RelocateTests(BuildTestCase):
     def snapshot(self, folder):
         return {p.relative_to(folder).as_posix(): (p.stat().st_mtime_ns, p.read_bytes())
@@ -828,6 +967,11 @@ class ConfigFileTests(unittest.TestCase):
                          {"garbage_detection": "studio", "taco": "real_world", "hitl": "real_world", "dwsd": "india"})
         self.assertEqual(by["dwsd"]["force_split"], "test")
         self.assertTrue(by["dwsd"]["optional"])
+        self.assertEqual(by["dwsd"]["format"], "semantic_mask")
+        self.assertEqual(sorted(by["dwsd"]["mask_values"]), list(range(1, 16)))
+        self.assertEqual(by["dwsd"]["ignore_values"], [0])
+        self.assertEqual(sorted(set(by["dwsd"]["mask_values"].values())), sorted(by["dwsd"]["class_map"]))
+        self.assertTrue({"dswd", "dwsd"} <= {bd.norm_name(n) for n in by["dwsd"]["locate"]})
         self.assertFalse(any(by[n]["optional"] for n in ("garbage_detection", "taco", "hitl")))
         self.assertEqual(len(by["taco"]["class_map"]), 60)
         self.assertEqual(sorted(by["hitl"]["class_map"]), ["aluminum", "celluloseacetate", "glass", "metal", "paper",

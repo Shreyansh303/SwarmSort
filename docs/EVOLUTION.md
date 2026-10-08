@@ -126,17 +126,17 @@ The earlier plan listed `Garbage_dataset_PlusYaml` as a candidate. It was droppe
 | Gen 1 garbage-detection | `viswaprakash1990/garbage-detection` | YOLO | CC BY 4.0 | Train/val/test. Gen 1 split kept; a class-stratified, seeded sample of about 3,000 of 7,324 train and 900 of 2,094 val images; all 1,046 Gen 1 test images stay test | `studio` |
 | TACO, official set (1,500 images, 4,784 boxes) | `kneroma/tacotrashdataset` | COCO | CC BY 4.0 | Train/val/test (70/20/10, duplicate-aware) | `real_world` |
 | HITL Recycling (about 3,200 images, 1 box each) | `humansintheloop/recycling-dataset` | Supervisely JSON, class from the Material tag | CC0 | Train/val/test (70/20/10, duplicate-aware) | `real_world` |
-| DWSD, Dense Waste Segmentation (784 images, Kolkata) | private upload of Mendeley `gr99ny6b8p` | Labelme polygons | CC BY 4.0 | **Test only**: all 784 images form the held-out "India real-world" test set | `india` |
+| DWSD, Dense Waste Segmentation (784 images, Kolkata) | private upload of Mendeley `gr99ny6b8p` (`shreyanshjain30/dwsd-india-waste`) | Grey-level semantic masks (pixel value = class), converted to one box per connected region | CC BY 4.0 | **Test only**: the held-out "India real-world" test set (700 of the 784 images; the 84 with no box left are left out) | `india` |
 
 - Classes (7, in index order): BIODEGRADABLE, CARDBOARD, GLASS, METAL, PAPER, PLASTIC, OTHER. Gen 1's six keep their indices; OTHER is a narrow catch-all (cigarettes, unidentified litter, mixed bin bags, textile and rubber, hazardous items, multi-layer blister packs).
-- Every source's classes are mapped in `configs/gen2/sources.yaml`. TACO: all 60 categories map to a class, none is dropped. HITL: Object-tag overrides first (for example cigarette butt → OTHER, food waste → BIODEGRADABLE), then the Material tag; objects without a Material tag (about 8%) become OTHER. DWSD: its 14 classes (cloth → OTHER).
+- Every source's classes are mapped in `configs/gen2/sources.yaml`. TACO: all 60 categories map to a class, none is dropped. HITL: Object-tag overrides first (for example cigarette butt → OTHER, food waste → BIODEGRADABLE), then the Material tag; objects without a Material tag (about 8%) become OTHER. DWSD: 15 mask values with names inferred from the images (see the 2026-10-08 entries below); foil and cans → METAL, paper and cups → PAPER, flat card → CARDBOARD, cloth → OTHER, the rest → PLASTIC.
 - Per-domain test sets: `data_test_studio.yaml`, `data_test_real_world.yaml`, `data_test_india.yaml`.
 - Checked on TACO's real `annotations.json`: after mapping, BIODEGRADABLE 8, CARDBOARD 251, GLASS 254, METAL 544, PAPER 246, PLASTIC 2,221 and OTHER 1,260 boxes (4,784 in total), as the research predicted.
 
 ### Method (planned)
 
 - A **multi-source dataset builder** (`src/build_dataset.py`):
-  - readers for YOLO, COCO, Supervisely and Labelme sources, and a class-mapping config per source;
+  - readers for YOLO, COCO, Supervisely, Labelme and semantic-mask sources, and a class-mapping config per source;
   - per-source options: force a source into one split (DWSD → test), subsample a pinned source (Gen 1), and drop-and-mask (remove a box and paint its region grey, available but not needed with OTHER);
   - a relocate mode, so later Kaggle notebooks can use the finished build when it is attached read-only;
   - a stratified, duplicate-aware split across all sources (the Gen 1 duplicate rules extended to the merged data);
@@ -171,6 +171,8 @@ The earlier plan listed `Garbage_dataset_PlusYaml` as a candidate. It was droppe
 | 2026-10-07 | Gen 1 is subsampled to about 3,000 train and 900 val images (stratified by class, seeded); all 1,046 Gen 1 test images stay test, and Gen 1 split assignments still come from `configs/split.csv`. |
 | 2026-10-07 | Domains: Gen 1 → `studio`; TACO and HITL → `real_world`; DWSD → `india`. Each has its own test list and yaml. |
 | 2026-10-07 | Licences recorded per source: TACO CC BY 4.0, HITL CC0, DWSD CC BY 4.0, Gen 1 CC BY 4.0. |
+| 2026-10-08 | DWSD is read as semantic masks, not Labelme: the builder's new `semantic_mask` format turns each connected region of a class value into one box (8-connectivity; regions under 50 mask pixels are dropped and counted). Masks with no class pixels (81, plus 3 with only tiny regions) are left out, because some of them show unannotated waste. |
+| 2026-10-08 | DWSD's mask value → class mapping is **inferred** from the images. The official table (Ali et al., Data in Brief 2025, Table 3: 1 plastic container ... 14 nylon, "0 and 15 background") matches the masks' pixel counts exactly, but not their content: for example value 6 sits on plastic bottles (table: glass), 14 on foil (table: nylon), 12 on clothes (table: aluminium foil), and 15, which covers polythene bags in 610 of 784 masks, is not background. The names used are in `configs/gen2/sources.yaml`; values 1, 4, 7, 9, 11 and 13 are uncertain. |
 
 **To be decided** (the OTHER class and the image size were settled on 2026-10-07, see above):
 
@@ -179,13 +181,19 @@ The earlier plan listed `Garbage_dataset_PlusYaml` as a candidate. It was droppe
 
 ### Results
 
-None yet.
+No test results yet. Progress so far (val numbers only; the test split is used once, in `g2_6_evaluate`):
+
+- **Dataset** (`results/gen2/build_report.json`): 6,292 train, 1,841 val and 1,514 test images (1,046 studio, 468 real_world test images), 7 classes, built without DWSD (see Problems below).
+- **Arm A** (defaults, 100 epochs at imgsz 640, `results/gen2/arm_a.json`): val mAP@50 0.4535, mAP@50-95 0.3203.
+- **PSO search** (8 particles x 4 rounds = 32 proxy trainings of 12 epochs, `results/gen2/search_pso.json`): gbest val mAP@50 0.32901 (`r1_p8`), already found in round 1 and not improved after. The swarm still converged towards it: the round means rose from 0.267 to 0.286, 0.300 and 0.319. The winner is in `results/gen2/best_pso.json`.
 
 ### Problems and fixes
 
 | Problem | Symptom | Cause | Fix |
 |---|---|---|---|
-| (none recorded yet) | | | |
+| (2026-10-08) DWSD missing from the build | The g2_0 build (Kaggle version 356132858) has no India test set; `build_report.json` warns that the optional source `dwsd` was not found | The private DWSD upload had not finished when g2_0 ran, so the optional source was skipped | Training was already running on that build, so it is not rebuilt. DWSD is test-only, so `g2_6_evaluate` builds it on its own at evaluation time (`build_dataset.py --only dwsd`, same config, so the same 7 classes) and scores it with tag `india`. Duplicate grouping between DWSD and the training sources is not run (separate collection, test-only); an MD5 cross-check against the main build reports byte-identical files instead |
+| (2026-10-08) DWSD is not in Labelme format | The local download (`DSWD/`) has `Train/` and `Test/` folders of PNG photos with grey-level PNG masks (values 0-15), and no Labelme JSON, so the `labelme` reader would find nothing | The research assumed Labelme JSON because the dataset page says it was annotated in Labelme; only the exported masks are published | New `semantic_mask` reader in `src/build_dataset.py` (connected regions → boxes). Known limitation: touching objects of the same class form one region and become one box, so DWSD has fewer, larger boxes than a per-instance annotation (local build: 700 test images, 4,502 boxes: PLASTIC 3,040, PAPER 1,230, CARDBOARD 124, OTHER 90, METAL 18, no GLASS). `g2_6_evaluate` now also catches any India build or evaluation failure and goes on with the other domains |
+| (2026-10-08) Identical images inside HITL | `build_report.json` counts 918 identical-MD5 image pairs (plus 1,004 dHash and 26 thumbnail matches; 962 duplicate groups with 1,954 images, none across sources) | HITL contains the same photo under different file names, some with stock-photo names (for example `can-696583__340.jpg`). No group spans two sources and Gen 1 alone has 0 identical-MD5 pairs (`results/dataset_report.json`), so the pairs are within HITL (possibly a few within TACO: the report does not split the count by source) | No leakage: each group is kept in one split. But the copies count more than once in training, so they give those photos extra weight. Kept as they are for Gen 2 |
 
 ### Status
 

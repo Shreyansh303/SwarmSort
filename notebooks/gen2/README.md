@@ -48,7 +48,7 @@ If Kaggle queues a notebook because too many sessions are running, run it after 
 | `g2_3_search_random` | GPU T4 x2 | output of `g2_0_build_dataset` (and, to resume, an earlier version of itself) | `SwarmSort/results/gen2/search_random.json`, `best_random.json` |
 | `g2_4_arm_b` | GPU T4 x2 | output of `g2_0_build_dataset`, plus `g2_3_search_random` if `best_random.json` is not committed | `SwarmSort/results/gen2/arm_b.json`, `arm_b_epochs.csv`, `gen2_arm_b_best.pt` |
 | `g2_5_arm_c` | GPU T4 x2 | output of `g2_0_build_dataset`, plus `g2_2_search_pso` if `best_pso.json` is not committed | `SwarmSort/results/gen2/arm_c.json`, `arm_c_epochs.csv`, `gen2_arm_c_best.pt` |
-| `g2_6_evaluate` | GPU T4 x2 | outputs of `g2_0_build_dataset`, `g2_1_arm_a`, `g2_4_arm_b`, `g2_5_arm_c` | `SwarmSort/results/gen2/test_<tag>_results.json`, `test_<tag>_comparison.md`, `test_domains.md`, `plots/` |
+| `g2_6_evaluate` | GPU T4 x2 | outputs of `g2_0_build_dataset`, `g2_1_arm_a`, `g2_4_arm_b`, `g2_5_arm_c`, and your private DWSD dataset (optional, if the g2_0 build has no India test set) | `SwarmSort/results/gen2/test_<tag>_results.json`, `test_<tag>_comparison.md`, `test_domains.md`, `plots/`, and `build_report_india.json` if DWSD was built there |
 
 Every notebook ends with a "Files to download / where they go locally" table. In short, everything goes into the
 local `results/gen2/`, except `split.csv`, which goes to `configs/gen2/split.csv`. A `.pt` file downloads as a `.zip`:
@@ -90,22 +90,38 @@ optional: without it, the build and every notebook still run, but there is no In
 1. Open https://data.mendeley.com/datasets/gr99ny6b8p and download the dataset zip (`DSWD.zip`, about 250 MB).
 2. On Kaggle, go to **Datasets -> New Dataset** and upload the zip. Kaggle unpacks zip files by itself. You can also
    unzip it locally and upload the folder.
-3. Give the dataset a title that contains **"dwsd"**, for example `dwsd-india`. `configs/gen2/sources.yaml` finds the
-   source by any folder whose name contains "dwsd", "dswd" or "dense waste".
+3. Give the dataset a title, for example `dwsd-india-waste` (the current upload is
+   `shreyanshjain30/dwsd-india-waste`). `configs/gen2/sources.yaml` finds the source by its `DSWD` (or `DWSD`) folder,
+   which holds `Train/Image`, `Train/Mask`, `Test/Image` and `Test/Mask`.
 4. Keep the visibility on **Private** and click **Create**.
 5. In `g2_0_build_dataset`, use **Add Input -> Datasets -> Your Datasets** and attach it, together with the three
    public datasets.
 
-All DWSD images go to the test split (the india domain). They are never used for training. If the build stops with an
-unknown DWSD label, its message names the label. Add that spelling to the `dwsd` class map in
-`configs/gen2/sources.yaml`, push, and run notebook 0 again.
+DWSD comes as grey-level semantic masks (`format: semantic_mask`): each pixel value 1-15 is a class, and every
+connected region of one value becomes one box (touching objects of the same class merge into one box). The value ->
+class names in the config are inferred from the images, because the names published with the dataset do not match
+what the masks show (see `configs/gen2/sources.yaml`). All DWSD images with at least one box go to the test split (the
+india domain); masks with no class pixels are left out. They are never used for training. If the build stops with an
+unknown mask value, its message names the value and a mask file. Add the value to the `dwsd` `mask_values` (and its
+name to the class map) in `configs/gen2/sources.yaml`, push, and run the notebook again.
+
+**DWSD can also be attached at evaluation time instead.** Because DWSD is test-only, it does not change the training
+data, so the main build does not need it. If `g2_0_build_dataset` ran without DWSD (as the current Gen 2 build did),
+attach your DWSD dataset to `g2_6_evaluate` instead. That notebook then builds a separate, DWSD-only test set with
+`build_dataset.py --only dwsd` (same config, so the same 7 classes in the same order, and the same `--seed` and
+`--max-side` as the main build) into `/kaggle/working/gen2_india`, and scores it with tag `india`. It also runs an MD5
+cross-check against every image of the main build and reports any identical files in `build_report_india.json`.
+Without DWSD, `g2_6_evaluate` skips india with a message. India never stops the notebook: if DWSD is attached but its
+build or its evaluation fails (for example an unknown mask value), the error is printed with a clear warning, india is
+left out of the tables, and all, studio and real_world are scored as usual. Fix the config, push and run again to add
+india.
 
 ## If something fails
 
 - **"The Generation 2 dataset is not attached"**: attach the output of `g2_0_build_dataset` (Add Input ->
   Notebook Output).
-- **"no --relocate-from mode yet"** or a missing config: the GitHub repository is older than these notebooks. Push your
-  local commits and run again.
+- **"no --relocate-from mode yet"**, **"no --only option yet"** or a missing config: the GitHub repository is older
+  than these notebooks. Push your local commits and run again.
 - **A dead search session**: attach the failed version to a new run of the same notebook. The search continues where
   it stopped, and at most one proxy training is lost.
 - **A dead training or evaluation session**: rerun it with the same inputs. Every run is seeded and deterministic.

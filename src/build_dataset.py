@@ -1,4 +1,5 @@
-"""Generation 2: merge several waste-detection datasets (YOLO, COCO, Supervisely, Labelme) into one YOLO dataset.
+"""Generation 2: merge several waste-detection datasets (YOLO, COCO, Supervisely, Labelme, semantic masks) into one
+YOLO dataset.
 
     python src/build_dataset.py --sources configs/gen2/sources.yaml --out data_gen2 --seed 42
     python src/build_dataset.py --sources configs/gen2/sources.yaml --out /kaggle/working/gen2_data \
@@ -12,6 +13,13 @@ The lists and yamls inside it point to where it was built, so rewrite them into 
 This writes data.yaml, data_test_*.yaml, lists/*.txt and split.csv (with a 'path' column) into --out, every path
 pointing into the read-only build. Nothing is written into the build folder.
 
+Only mode: --only <source> [...] builds just the named sources of the config, with their settings unchanged. A
+source named here is required even if the config marks it optional. Example, the India test set on its own (DWSD
+is test-only, so it needs nothing from the other sources):
+
+    python src/build_dataset.py --sources configs/gen2/sources.yaml --out /kaggle/working/gen2_india \
+        --search-root /kaggle/input --max-side 1280 --only dwsd
+
 Steps:
   1. Read the sources config: target classes, and per source its format, where to find it, and how its classes map
      to the target classes (a target name, drop_annotation, drop_and_mask or drop_image; an unmapped class is an
@@ -20,7 +28,10 @@ Steps:
      (Ultralytics' rule). COCO: one annotations json and an image folder; crowd and invalid boxes are skipped
      and counted. Supervisely: <dataset>/ann/<image>.json next to <dataset>/img/<image>, plus the project
      meta.json; the class can come from an object tag (e.g. Material). Labelme: one json per image with
-     polygon/rectangle shapes; each shape's bounding box is one box. A source that is not found is an error naming
+     polygon/rectangle shapes; each shape's bounding box is one box. Semantic masks (e.g. DWSD): one grey-level
+     mask per image, paired by file stem, each pixel value a class; every connected region of a class value
+     becomes one box (regions under min_box_area pixels are dropped and counted). Limitation: touching objects of
+     the same class form one region, so they merge into one box. A source that is not found is an error naming
      the Kaggle dataset to attach, unless it is optional (then it is skipped with a warning).
   3. Optional per source: force_split (every image to one split) and subsample (a seeded, class-stratified sample
      of a pinned source's train/valid images; test is never subsampled).
@@ -70,12 +81,15 @@ SPLIT_PRIORITY = {"test": 2, "valid": 1, "train": 0}  # a duplicate group pinned
 ORIENT_SWAPS = {5, 6, 7, 8}  # EXIF orientations that swap width and height
 ASPECT_TOL = 0.02  # recorded vs actual image size: same aspect ratio within 2%
 SKIP_DIRS = {"images", "labels", "__pycache__", "node_modules", "site-packages"}
-FORMATS = ("yolo", "coco", "supervisely", "labelme")
-PIXEL_FORMATS = ("coco", "supervisely", "labelme")  # boxes in pixels of a recorded image size
+FORMATS = ("yolo", "coco", "supervisely", "labelme", "semantic_mask")
+PIXEL_FORMATS = ("coco", "supervisely", "labelme", "semantic_mask")  # boxes in pixels of a recorded image size
+MASK_KEYS = ("image_dirs", "mask_dirs", "image_prefix", "mask_prefix", "mask_values", "ignore_values",
+             "min_box_area", "connectivity")  # semantic_mask only
+MASK_EXTS = {".png", ".bmp", ".tif", ".tiff", ".gif"}  # lossless only: a JPEG mask would have stray class values
 SOURCE_KEYS = {"name", "enabled", "format", "locate", "locate_match", "names_file", "annotations", "images_dir",
                "class_field", "box_frame", "class_map", "allow_unused_map_keys", "class_from_tag", "tag_overrides",
                "untagged", "domain", "licence", "kaggle", "optional", "keep_split_csv", "force_split", "subsample",
-               "max_images", "keep_empty"}
+               "max_images", "keep_empty", *MASK_KEYS}
 TOP_KEYS = {"classes", "sources"}
 SLUG = re.compile(r"^[A-Za-z0-9_-]+$")
 OUTPUT_FILES = ("split.csv", "build_report.json", "labels.cache")
@@ -97,8 +111,9 @@ def as_list(value):
     return [] if value is None else [value] if isinstance(value, str) else list(value)
 
 
-def load_config(path):
-    """Read and check the sources yaml. Returns (classes, enabled sources as dicts with defaults filled in)."""
+def load_config(path, only=None):
+    """Read and check the sources yaml. Returns (classes, enabled sources as dicts with defaults filled in).
+    only: a list of source names; then just those sources are returned (each must exist and be enabled)."""
     path = Path(path)
     if not path.is_file():
         raise BuildError(f"Sources config {path} not found")
@@ -111,7 +126,7 @@ def load_config(path):
         raise BuildError(f"{path}: 'classes' must be a non-empty list of unique target class names")
     if set(DROP_TARGETS) & set(classes):
         raise BuildError(f"{path}: {list(DROP_TARGETS)} cannot be class names")
-    sources, seen = [], set()
+    sources, seen, disabled = [], set(), set()
     for i, src in enumerate(cfg.get("sources") or []):
         where = f"{path}: source #{i + 1}"
         if not isinstance(src, dict):
@@ -126,10 +141,23 @@ def load_config(path):
             raise BuildError(f"{path}: source name '{name}' is used twice")
         seen.add(name.lower())
         if not src.get("enabled", True):
+            disabled.add(name)
             continue  # disabled sources may hold unfinished placeholders
         sources.append(check_source(src, name, f"{path}: source '{name}'", classes))
     if not sources:
         raise BuildError(f"{path}: no enabled sources")
+    if only is not None:
+        wanted = [str(n) for n in only]
+        if not wanted:
+            raise BuildError("--only needs at least one source name")
+        names = [s["name"] for s in sources]
+        off = [n for n in wanted if n in disabled]
+        if off:
+            raise BuildError(f"--only: source(s) {off} are disabled in {path} (enabled: {names})")
+        unknown = [n for n in wanted if n not in names]
+        if unknown:
+            raise BuildError(f"--only: unknown source(s) {unknown}; the sources in {path} are {names}")
+        sources = [s for s in sources if s["name"] in wanted]
     return classes, sources
 
 
@@ -157,7 +185,12 @@ def check_source(src, name, where, classes):
          "kaggle": src.get("kaggle"), "optional": bool(src.get("optional", False)),
          "keep_split_csv": src.get("keep_split_csv"), "force_split": src.get("force_split"),
          "subsample": src.get("subsample"), "max_images": src.get("max_images"),
-         "keep_empty": bool(src.get("keep_empty", False))}
+         "keep_empty": bool(src.get("keep_empty", False)),
+         "image_dirs": [str(v) for v in as_list(src.get("image_dirs"))],
+         "mask_dirs": [str(v) for v in as_list(src.get("mask_dirs"))],
+         "image_prefix": str(src.get("image_prefix") or ""), "mask_prefix": str(src.get("mask_prefix") or ""),
+         "mask_values": src.get("mask_values"), "ignore_values": src.get("ignore_values", [0]),
+         "min_box_area": src.get("min_box_area", 50), "connectivity": src.get("connectivity", 8)}
     if fmt not in FORMATS:
         raise BuildError(f"{where}: 'format' must be one of {', '.join(FORMATS)} (got {fmt!r})")
     if fmt != "coco" and not s["locate"]:
@@ -167,9 +200,12 @@ def check_source(src, name, where, classes):
     misplaced = [k for k, fmts in (("names_file", ("yolo",)), ("annotations", ("coco",)), ("images_dir", ("coco",)),
                                    ("class_field", ("coco",)), ("box_frame", PIXEL_FORMATS),
                                    ("class_from_tag", ("supervisely",)), ("tag_overrides", ("supervisely",)),
-                                   ("untagged", ("supervisely",))) if k in src and fmt not in fmts]
+                                   ("untagged", ("supervisely",)),
+                                   *((k, ("semantic_mask",)) for k in MASK_KEYS)) if k in src and fmt not in fmts]
     if misplaced:
         raise BuildError(f"{where}: {misplaced} cannot be used with format {fmt}")
+    if fmt == "semantic_mask":
+        check_mask_settings(s, where)
     if s["locate_match"] not in ("exact", "contains"):
         raise BuildError(f"{where}: 'locate_match' must be exact or contains")
     if s["class_field"] not in ("name", "supercategory"):
@@ -228,6 +264,43 @@ def check_source(src, name, where, classes):
         if not s["keep_split_csv"]:
             raise BuildError(f"{where}: 'subsample' works on a source pinned by keep_split_csv")
     return s
+
+
+def mask_value(v):
+    """A mask pixel value from the config (yaml keys may come as strings); None if it is not an integer 0-255."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, str) and v.strip().isdigit():
+        v = int(v)
+    return v if isinstance(v, int) and 0 <= v <= 255 else None
+
+
+def check_mask_settings(s, where):
+    """Validate the semantic_mask settings of a source dict in place (values become ints, names strings)."""
+    if not s["image_dirs"] or len(s["image_dirs"]) != len(s["mask_dirs"]):
+        raise BuildError(f"{where}: a semantic_mask source needs 'image_dirs' and 'mask_dirs', two lists of the same "
+                         f"length (folders relative to the located folder, paired in order)")
+    mv = s["mask_values"]
+    if not isinstance(mv, dict) or not mv:
+        raise BuildError(f"{where}: 'mask_values' must map each mask pixel value to a source class name")
+    values = {}
+    for k, name in mv.items():
+        v = mask_value(k)
+        if v is None or name is None or not str(name).strip():
+            raise BuildError(f"{where}: 'mask_values' entry {k!r}: {name!r} must be an integer 0-255 and a class name")
+        values[v] = str(name)
+    s["mask_values"] = values
+    ignore = [mask_value(v) for v in as_list(s["ignore_values"])]
+    if None in ignore:
+        raise BuildError(f"{where}: 'ignore_values' must be a list of integers 0-255 (e.g. [0] for background)")
+    both = sorted(set(ignore) & set(values))
+    if both:
+        raise BuildError(f"{where}: values {both} are in both 'mask_values' and 'ignore_values'")
+    s["ignore_values"] = sorted(set(ignore))
+    if not is_pos_int(s["min_box_area"]):
+        raise BuildError(f"{where}: 'min_box_area' must be a positive integer (pixels of the mask)")
+    if s["connectivity"] not in (4, 8) or isinstance(s["connectivity"], bool):
+        raise BuildError(f"{where}: 'connectivity' must be 4 or 8")
 
 
 def check_class_map(src, source_names):
@@ -326,6 +399,28 @@ def has_json(folder):
         except OSError:
             continue
     return False
+
+
+def find_subdir(root, rel):
+    """root/rel with each folder name matched ignoring case (zip tools and uploads may change it); None if absent."""
+    cur = Path(root)
+    for part in Path(rel).parts:
+        if (cur / part).is_dir():
+            cur = cur / part
+            continue
+        try:
+            hits = sorted(d for d in cur.iterdir() if d.is_dir() and d.name.lower() == part.lower())
+        except OSError:
+            return None
+        if not hits:
+            return None
+        cur = hits[0]
+    return cur
+
+
+def has_mask_pairs(src):
+    """ok() for locate_named: the folder holds every image_dirs and mask_dirs folder of a semantic_mask source."""
+    return lambda folder: all(find_subdir(folder, r) for r in src["image_dirs"] + src["mask_dirs"])
 
 
 def locate_named(src, search_root, skip, ok, what):
@@ -776,8 +871,97 @@ def read_labelme(src, root, classes, stats):
     return sorted(seen), items
 
 
+def mask_regions(mask, mask_values, ignore_values, min_area, connectivity):
+    """Boxes of the connected regions of each class value of a semantic mask (2-D array of pixel values).
+
+    Returns (regions, tiny, unknown): regions = [(value, [x, y, w, h])] in pixels, box edges on pixel borders;
+    tiny = Counter value -> regions of fewer than min_area pixels (dropped); unknown = values present in the mask
+    that are in neither mask_values nor ignore_values. Touching objects of one value form one region (one box).
+    """
+    from scipy import ndimage  # only this format needs scipy
+    structure = ndimage.generate_binary_structure(2, 2 if connectivity == 8 else 1)
+    regions, tiny = [], Counter()
+    present = [int(v) for v in np.unique(mask)]
+    unknown = [v for v in present if v not in mask_values and v not in ignore_values]
+    for v in present:
+        if v not in mask_values:
+            continue
+        labels, n = ndimage.label(mask == v, structure=structure)
+        areas = np.bincount(labels.ravel(), minlength=n + 1)
+        for i, (ys, xs) in enumerate(ndimage.find_objects(labels), start=1):
+            if areas[i] < min_area:
+                tiny[v] += 1
+                continue
+            regions.append((v, [float(xs.start), float(ys.start), float(xs.stop - xs.start),
+                                float(ys.stop - ys.start)]))
+    return regions, tiny, unknown
+
+
+def files_by_key(folder, prefix, exts, what, src):
+    """{stem without prefix: path} of the files with one of exts in folder; two files with one key is an error."""
+    out = {}
+    for p in sorted(folder.iterdir()):
+        if not p.is_file() or p.suffix.lower() not in exts:
+            continue
+        key = p.stem[len(prefix):] if prefix and p.stem.startswith(prefix) else p.stem
+        if key in out:
+            raise BuildError(f"source '{src['name']}': two {what} files pair with the same stem '{key}': "
+                             f"{out[key].name} and {p.name} in {folder}")
+        out[key] = p
+    return out
+
+
+def read_semantic_mask(src, root, classes, stats):
+    """Semantic masks: image_dirs[i] holds the photos and mask_dirs[i] one single-channel mask per photo, paired by
+    file stem after removing image_prefix / mask_prefix (DWSD: img_12.png <-> mask_12.png). Each pixel value is a
+    class (mask_values) or ignored (ignore_values, e.g. 0 = background); each connected region of a class value is
+    one box. A value in neither list, an unpaired file or a multi-channel mask is an error.
+    Returns (source class names, items)."""
+    values, ignore = src["mask_values"], set(src["ignore_values"])
+    items, unknown = [], defaultdict(list)
+    for img_rel, mask_rel in zip(src["image_dirs"], src["mask_dirs"]):
+        img_dir, mask_dir = find_subdir(root, img_rel), find_subdir(root, mask_rel)
+        if img_dir is None or mask_dir is None:
+            raise SourceMissing(f"source '{src['name']}': folder {img_rel if img_dir is None else mask_rel} not "
+                                f"found in {root}" + missing_hint(src))
+        imgs = files_by_key(img_dir, src["image_prefix"], IMG_EXTS, "image", src)
+        masks = files_by_key(mask_dir, src["mask_prefix"], MASK_EXTS, "mask", src)
+        no_mask, no_img = sorted(set(imgs) - set(masks)), sorted(set(masks) - set(imgs))
+        if no_mask or no_img:
+            raise BuildError(
+                f"source '{src['name']}': images and masks do not pair up by file stem (prefixes "
+                f"'{src['image_prefix']}' / '{src['mask_prefix']}' removed) in {img_dir} and {mask_dir}: "
+                f"{len(no_mask)} images without a mask {[imgs[k].name for k in no_mask[:5]]}, "
+                f"{len(no_img)} masks without an image {[masks[k].name for k in no_img[:5]]}")
+        for key in sorted(imgs):
+            try:
+                with Image.open(masks[key]) as im:
+                    mask = np.asarray(im)
+            except Exception as e:
+                raise BuildError(f"source '{src['name']}': cannot read mask {masks[key]}: {e}") from None
+            if mask.ndim != 2:
+                raise BuildError(f"source '{src['name']}': mask {masks[key]} has {mask.shape[-1]} channels; a "
+                                 f"semantic mask must be single-channel (one class value per pixel)")
+            regions, tiny, unk = mask_regions(mask, values, ignore, src["min_box_area"], src["connectivity"])
+            for v in unk:
+                unknown[v].append(masks[key])
+            for v, n in tiny.items():
+                stats["annotations_dropped"][f"tiny_region:{values[v]}"] += n
+            objects = [{"name": values[v], "override": None, "bbox": b, "problem": None} for v, b in regions]
+            items.append({"source": src["name"], "uid": imgs[key].relative_to(root).as_posix(), "path": imgs[key],
+                          "recorded": (mask.shape[1], mask.shape[0]), "objects": objects})
+    if unknown:
+        raise BuildError(f"source '{src['name']}': mask values {sorted(unknown)} are in neither mask_values nor "
+                         f"ignore_values (e.g. " + "; ".join(f"{v} in {unknown[v][0]} and {len(unknown[v]) - 1} more"
+                                                             for v in sorted(unknown)) + ")")
+    if not items:
+        raise SourceMissing(f"source '{src['name']}': no image/mask pairs in {root}" + missing_hint(src))
+    items.sort(key=lambda it: it["uid"])
+    return sorted(set(values.values())), items
+
+
 def map_objects_item(item, src, classes, stats):
-    """Map a Supervisely or Labelme item's objects to target classes. Returns False if the image is dropped."""
+    """Map a Supervisely, Labelme or semantic-mask item's objects to target classes. False if the image is dropped."""
     target_idx = {c: i for i, c in enumerate(classes)}
     mapped, masks = [], []
     for obj in item["objects"]:
@@ -1035,9 +1219,13 @@ def new_stats():
             "label_issues": Counter(), "warnings": Counter()}
 
 
-def build(sources_yaml, out, seed=42, max_side=1280, search_root=None, max_images=None, workers=8, log=print):
+def build(sources_yaml, out, seed=42, max_side=1280, search_root=None, max_images=None, workers=8, log=print,
+          only=None):
+    """only: build just these source names (see load_config); a source named there is required even if optional."""
     sources_yaml = Path(sources_yaml).resolve()
-    classes, sources = load_config(sources_yaml)
+    classes, sources = load_config(sources_yaml, only)
+    if only is not None:
+        log(f"--only: building just {[s['name'] for s in sources]}")
     search_root = Path(search_root).resolve() if search_root else REPO
     if not search_root.is_dir():
         raise BuildError(f"--search-root {search_root} is not a folder")
@@ -1056,12 +1244,18 @@ def build(sources_yaml, out, seed=42, max_side=1280, search_root=None, max_image
                 locate = {"yolo": locate_yolo,
                           "supervisely": lambda s, r, skip: locate_named(s, r, skip, has_supervisely,
                                                                          "Supervisely ann/ and img/ folders"),
-                          "labelme": lambda s, r, skip: locate_named(s, r, skip, has_json, "json files")}
+                          "labelme": lambda s, r, skip: locate_named(s, r, skip, has_json, "json files"),
+                          "semantic_mask": lambda s, r, skip: locate_named(
+                              s, r, skip, has_mask_pairs(s), f"the folders {s['image_dirs'] + s['mask_dirs']}")}
                 root = locate[src["format"]](src, search_root, skip=[out])
-                reader = {"yolo": read_yolo, "supervisely": read_supervisely, "labelme": read_labelme}
+                reader = {"yolo": read_yolo, "supervisely": read_supervisely, "labelme": read_labelme,
+                          "semantic_mask": read_semantic_mask}
                 names, items = reader[src["format"]](src, root, classes, stats)
                 location = root
         except SourceMissing as e:
+            if only is not None:
+                raise SourceMissing(f"source '{src['name']}' was asked for with --only, so it is required: "
+                                    f"{e}") from e
             if not src["optional"]:
                 raise
             skipped[src["name"]] = str(e)
@@ -1203,7 +1397,7 @@ def build(sources_yaml, out, seed=42, max_side=1280, search_root=None, max_image
     report = make_report(per_source, kept, groups, near_matches, excluded, conflicts, pin_report, classes,
                          variants, warnings, dict(seed=seed, max_side=max_side, search_root=search_root.as_posix(),
                                                   max_images=max_images, sources_yaml=sources_yaml.as_posix(),
-                                                  out=out.as_posix()), sub_report, skipped)
+                                                  out=out.as_posix(), only=only), sub_report, skipped)
     (out / "build_report.json").write_text(json.dumps(report, indent=2))
     return report
 
@@ -1361,6 +1555,8 @@ def main(argv=None):
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--relocate-from", help="a finished build (may be read-only); rewrite its yamls, lists and "
                     "split.csv into --out instead of building")
+    ap.add_argument("--only", nargs="+", metavar="SOURCE", help="build only these sources of the config (names as "
+                    "in --sources); each is required, even if the config marks it optional")
     args = ap.parse_args(argv)
     if args.relocate_from:
         try:
@@ -1369,7 +1565,7 @@ def main(argv=None):
             sys.exit(f"Error: {e}")
     try:
         report = build(args.sources, args.out, args.seed, args.max_side, args.search_root, args.max_images,
-                       args.workers)
+                       args.workers, only=args.only)
     except BuildError as e:
         sys.exit(f"Error: {e}")
     print_summary(report)
