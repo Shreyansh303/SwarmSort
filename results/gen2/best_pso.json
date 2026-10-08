@@ -1,0 +1,28 @@
+{
+  "method": "pso",
+  "source_log": "results/gen2/search_pso.json",
+  "index": 7,
+  "label": "r1_p8",
+  "map50": 0.32901,
+  "map50_95": 0.2211,
+  "params": {
+    "lr0": 0.00251495,
+    "lrf": 0.0693497,
+    "momentum": 0.916259,
+    "weight_decay": 0.000406938,
+    "mosaic": 0.387478,
+    "scale": 0.372997
+  },
+  "vector": [
+    -2.59947,
+    0.06935,
+    0.916259,
+    -3.390471,
+    0.387478,
+    0.372997
+  ],
+  "proxy_epochs": 12,
+  "imgsz": 640,
+  "seed": 42,
+  "smoke": false
+}
