@@ -2,9 +2,13 @@
 
     python src/train_final.py                    # Arm A: Ultralytics defaults, 100 epochs @416 -> results/baseline.json
     python src/train_final.py --config best_pso.json --name arm_c --out results/arm_c.json
+    python src/train_final.py ... --resume       # continue <project>/<name>/weights/last.pt if it exists
 
 --config takes a JSON file holding the searched hyperparameters, either at the top level or under "params".
 Validation runs every epoch; the reported metrics are the val-set metrics of best.pt.
+--resume continues an interrupted run with Ultralytics' resume after checking that its saved training arguments equal
+the ones this command would use (training.resume_run); without a last.pt it is a normal run. The JSON then also has
+"resumed": true and "resumed_from_epoch".
 """
 import argparse
 import json
@@ -15,7 +19,7 @@ from pathlib import Path
 import ultralytics
 
 from search_space import DEFAULTS, NAMES
-from training import BATCH, MODEL, REPO, SEED, device_name, train_run, write_json
+from training import BATCH, MODEL, REPO, SEED, device_name, resume_run, train_run, write_json
 
 
 def load_params(path):
@@ -41,6 +45,8 @@ def main():
     ap.add_argument("--model", default=MODEL)
     ap.add_argument("--device", help="e.g. 0 or cpu (default: Ultralytics picks)")
     ap.add_argument("--smoke", action="store_true", help="3 epochs: checks the pipeline only")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue <project>/<name>/weights/last.pt if it exists (same arguments required)")
     args = ap.parse_args()
     if args.smoke:
         args.epochs = 3
@@ -53,8 +59,15 @@ def main():
 
     params = load_params(args.config)
     print(f"Training '{args.name}' for {args.epochs} epochs at imgsz {args.imgsz} with {params}")
-    result = train_run(params, args.data, args.epochs, args.imgsz, args.name, args.project, val=True,
-                       model=args.model, device=args.device)
+    last = Path(args.project) / args.name / "weights" / "last.pt"
+    if args.resume and last.exists():
+        result = resume_run(params, args.data, args.epochs, args.imgsz, args.name, args.project, val=True,
+                            model=args.model, device=args.device)
+    else:
+        if args.resume:
+            print(f"--resume: {last} does not exist, so this is a normal run")
+        result = train_run(params, args.data, args.epochs, args.imgsz, args.name, args.project, val=True,
+                           model=args.model, device=args.device)
 
     out = Path(args.out)
     curves = out.with_name(out.stem + "_epochs.csv")  # per-epoch metrics, small enough to commit

@@ -33,3 +33,4 @@ venv/
 # Local tooling
 .claude/
 .env
+results/gen2/salvage/

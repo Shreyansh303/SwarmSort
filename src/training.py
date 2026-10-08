@@ -7,6 +7,7 @@ writes configs/lists/train_proxy.txt and configs/data_proxy.yaml (same val/test/
 import argparse
 import csv
 import json
+import math
 import os
 import time
 from collections import Counter, defaultdict
@@ -62,6 +63,141 @@ def train_run(params, data, epochs, imgsz, name, project, val, model=MODEL, devi
         "initial_lr": trainer.optimizer.param_groups[0]["initial_lr"],
         "train_args": {k: v for k, v in args.items() if k not in ("project", "name", "exist_ok")},
     }
+
+
+def run_args(params, data, epochs, imgsz, name, project, val, device=None, plots=True):
+    """The Ultralytics arguments train_run passes for these inputs (a copy of its rules, used to check a resume;
+    tests/test_resume.py checks that the two stay the same)."""
+    args = dict(data=str(data), epochs=epochs, imgsz=imgsz, batch=BATCH, seed=SEED, deterministic=True,
+                optimizer="SGD", close_mosaic=round(0.1 * epochs), warmup_epochs=round(0.03 * epochs, 4),
+                val=val, plots=plots, project=str(Path(project).resolve()), name=name, exist_ok=True, **params)
+    if device is not None:
+        args["device"] = device
+    return args
+
+
+NOT_CHECKED_ON_RESUME = ("project", "name", "exist_ok", "device")  # where and on which device, not how
+
+
+def resume_mismatches(saved, wanted):
+    """The training arguments in which a checkpoint's saved args differ from `wanted` (run_args), as text lines."""
+    diff = []
+    for k, v in wanted.items():
+        if k in NOT_CHECKED_ON_RESUME:
+            continue
+        if k not in saved:
+            diff.append(f"{k}: missing in the checkpoint, wanted {v!r}")
+            continue
+        s = saved[k]
+        if k == "data":
+            same = Path(str(s)).resolve() == Path(str(v)).resolve()
+        elif isinstance(v, bool) or isinstance(s, bool) or isinstance(v, str) or isinstance(s, str):
+            same = s == v
+        else:
+            same = math.isclose(float(s), float(v), rel_tol=1e-9, abs_tol=1e-12)
+        if not same:
+            diff.append(f"{k}: checkpoint {s!r}, wanted {v!r}")
+    return diff
+
+
+def trim_epochs_csv(path, epochs_done):
+    """Drop rows of an Ultralytics results.csv beyond `epochs_done` (a session killed between writing the row and
+    last.pt leaves one row too many) and return the remaining rows as dicts."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    with open(path, newline="") as f:
+        rows = [{k.strip(): v.strip() for k, v in r.items()} for r in csv.DictReader(f)]
+    keep = [r for r in rows if int(float(r["epoch"])) <= epochs_done]
+    if len(keep) < len(rows):
+        lines = path.read_text().splitlines(keepends=True)
+        path.write_text("".join(lines[:1 + len(keep)]))
+        print(f"Dropped {len(rows) - len(keep)} row(s) beyond epoch {epochs_done} from {path}")
+    return keep
+
+
+def csv_training_seconds(rows):
+    """Training time in an Ultralytics results.csv. Its time column counts from the start of each session and
+    restarts at a resume, so the last value of every session is added up."""
+    total, prev = 0.0, None
+    for r in rows:
+        t = float(r.get("time") or 0)
+        if prev is not None and t < prev:
+            total += prev
+        prev = t
+    return total + (prev or 0.0)
+
+
+def resume_run(params, data, epochs, imgsz, name, project, val, model=MODEL, device=None, plots=True):
+    """Continue an interrupted train_run from <project>/<name>/weights/last.pt. Returns train_run's fields plus
+    resumed (True), resumed_from_epoch (epochs finished before) and resume_seconds (this session).
+
+    Ultralytics' resume (YOLO(last.pt).train(resume=True)) restores every training argument from the checkpoint; only
+    the data yaml, the device and the run folder are passed. Before that, the saved arguments are compared with what
+    train_run would pass now (run_args), and again with what the resumed trainer really uses, so a resume never
+    continues a run made with another recipe or other hyperparameters. `model` is not needed: last.pt holds the
+    weights. If last.pt has no optimizer state (Ultralytics strips it once all epochs are done) or all epochs are
+    done, only the final validation of best.pt is missing, and it is run again.
+    "seconds" = the training time already in results.csv + this session's time.
+    """
+    from ultralytics import YOLO
+    import ultralytics.utils.events  # noqa: F401  (imported before seeding, as in train_run)
+    from ultralytics.nn.tasks import torch_safe_load
+
+    run_dir = Path(project).resolve() / name
+    last, best = run_dir / "weights" / "last.pt", run_dir / "weights" / "best.pt"
+    wanted = run_args(params, data, epochs, imgsz, name, project, val, device=device, plots=plots)
+    ckpt, _ = torch_safe_load(last)
+    diff = resume_mismatches(ckpt.get("train_args") or {}, wanted)
+    if diff:
+        raise RuntimeError(f"Cannot resume {last}: it was trained with other arguments:\n  " + "\n  ".join(diff)
+                           + f"\nUse the same arguments, or delete {run_dir} to start a new training.")
+    done = ckpt.get("epoch", -1) + 1
+    finished = ckpt.get("optimizer") is None or done >= epochs
+    rows = trim_epochs_csv(run_dir / "results.csv", epochs if finished else done)
+    before = csv_training_seconds(rows)
+    dev = {} if device is None else {"device": device}
+    start = time.time()
+    if finished:
+        print(f"{last}: all {epochs} epochs are done; validating best.pt again (the final step that was missing)")
+        if not best.exists():
+            raise FileNotFoundError(f"{best} not found: cannot finish {run_dir}")
+        import torch
+
+        metrics = YOLO(str(best)).val(data=str(data), imgsz=imgsz, batch=BATCH * 2, split="val", plots=plots,
+                                      half=torch.cuda.is_available() and str(device) != "cpu",
+                                      project=str(run_dir), name="final_val", exist_ok=True, **dev)
+        optimizer, initial_lr = wanted["optimizer"], wanted["lr0"]
+        resumed_from = epochs
+    else:
+        print(f"Resuming {last}: {done} of {epochs} epochs done, continuing at epoch {done + 1}")
+        yolo = YOLO(str(last))
+        metrics = yolo.train(resume=True, data=str(data), save_dir=str(run_dir), **dev)
+        trainer = yolo.trainer
+        diff = resume_mismatches(vars(trainer.args), wanted)
+        if diff:  # cannot happen unless Ultralytics' resume changes; then the result must not pass as this config
+            raise RuntimeError("The resumed training used other arguments:\n  " + "\n  ".join(diff))
+        optimizer = type(trainer.optimizer).__name__
+        initial_lr = trainer.optimizer.param_groups[0]["initial_lr"]
+        resumed_from = done
+    seconds = time.time() - start
+    result = {
+        "map50": round(float(metrics.box.map50), 5),
+        "map50_95": round(float(metrics.box.map), 5),
+        "precision": round(float(metrics.box.mp), 5),
+        "recall": round(float(metrics.box.mr), 5),
+        "seconds": round(before + seconds, 1),
+        "run_dir": run_dir.as_posix(),
+        "optimizer": optimizer,
+        "initial_lr": initial_lr,
+        "train_args": {k: v for k, v in wanted.items() if k not in ("project", "name", "exist_ok")},
+        "resumed": True,
+        "resumed_from_epoch": resumed_from,
+        "resume_seconds": round(seconds, 1),
+    }
+    if finished:
+        result["metrics_from"] = "best.pt validated again on resume (the training had finished)"
+    return result
 
 
 def write_json(path, obj):

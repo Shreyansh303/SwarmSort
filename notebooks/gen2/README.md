@@ -43,11 +43,11 @@ If Kaggle queues a notebook because too many sessions are running, run it after 
 | Notebook | Accelerator | Attach as input | Produces (in the Output tab) |
 |---|---|---|---|
 | `g2_0_build_dataset` | None (CPU) | datasets `kneroma/tacotrashdataset`, `humansintheloop/recycling-dataset`, `viswaprakash1990/garbage-detection`, and your private DWSD dataset (optional) | `gen2_data/` (images, labels, lists, `data.yaml`, `data_test_<domain>.yaml`, `split.csv`, `build_report.json`) and `gen2_check.jpg` |
-| `g2_1_arm_a` | GPU T4 x2 | output of `g2_0_build_dataset` | `SwarmSort/results/gen2/arm_a.json`, `arm_a_epochs.csv`, `gen2_arm_a_best.pt` |
+| `g2_1_arm_a` | GPU T4 x2 | output of `g2_0_build_dataset` (and, to continue a stopped run, an earlier version of itself) | `SwarmSort/results/gen2/arm_a.json`, `arm_a_epochs.csv`, `gen2_arm_a_best.pt` |
 | `g2_2_search_pso` | GPU T4 x2 | output of `g2_0_build_dataset` (and, to resume, an earlier version of itself) | `SwarmSort/results/gen2/search_pso.json`, `best_pso.json` |
 | `g2_3_search_random` | GPU T4 x2 | output of `g2_0_build_dataset` (and, to resume, an earlier version of itself) | `SwarmSort/results/gen2/search_random.json`, `best_random.json` |
-| `g2_4_arm_b` | GPU T4 x2 | output of `g2_0_build_dataset`, plus `g2_3_search_random` if `best_random.json` is not committed | `SwarmSort/results/gen2/arm_b.json`, `arm_b_epochs.csv`, `gen2_arm_b_best.pt` |
-| `g2_5_arm_c` | GPU T4 x2 | output of `g2_0_build_dataset`, plus `g2_2_search_pso` if `best_pso.json` is not committed | `SwarmSort/results/gen2/arm_c.json`, `arm_c_epochs.csv`, `gen2_arm_c_best.pt` |
+| `g2_4_arm_b` | GPU T4 x2 | output of `g2_0_build_dataset`, plus `g2_3_search_random` if `best_random.json` is not committed (and, to continue a stopped run, an earlier version of itself) | `SwarmSort/results/gen2/arm_b.json`, `arm_b_epochs.csv`, `gen2_arm_b_best.pt` |
+| `g2_5_arm_c` | GPU T4 x2 | output of `g2_0_build_dataset`, plus `g2_2_search_pso` if `best_pso.json` is not committed (and, to continue a stopped run, an earlier version of itself) | `SwarmSort/results/gen2/arm_c.json`, `arm_c_epochs.csv`, `gen2_arm_c_best.pt` |
 | `g2_6_evaluate` | GPU T4 x2 | outputs of `g2_0_build_dataset`, `g2_1_arm_a`, `g2_4_arm_b`, `g2_5_arm_c`, and your private DWSD dataset (optional, if the g2_0 build has no India test set) | `SwarmSort/results/gen2/test_<tag>_results.json`, `test_<tag>_comparison.md`, `test_domains.md`, `plots/`, and `build_report_india.json` if DWSD was built there |
 
 Every notebook ends with a "Files to download / where they go locally" table. In short, everything goes into the
@@ -122,6 +122,38 @@ india.
   Notebook Output).
 - **"no --relocate-from mode yet"**, **"no --only option yet"** or a missing config: the GitHub repository is older
   than these notebooks. Push your local commits and run again.
-- **A dead search session**: attach the failed version to a new run of the same notebook. The search continues where
-  it stopped, and at most one proxy training is lost.
-- **A dead training or evaluation session**: rerun it with the same inputs. Every run is seeded and deterministic.
+- **A dead or frozen search session**: attach the stopped version to a new run of the same notebook. The search
+  continues where it stopped, and at most one proxy training is lost.
+- **A dead or frozen training session** (`g2_1`, `g2_4`, `g2_5`): attach the stopped version to a new run of the same
+  notebook. Its salvage cell copies `results/gen2/runs/arm_X/` (with `weights/last.pt` and `results.csv`) from it,
+  and `train_final.py --resume` continues from the last finished epoch.
+- **A dead or frozen evaluation session**: rerun it with the same inputs. The evaluation is seeded and deterministic.
+
+In short: **if a version stopped or froze, attach its output and run again: it continues.**
+
+## Freeze protection
+
+On 2026-10-08 two runs, `g2_3_search_random` and `g2_5_arm_c`, froze about 55 minutes after training started: no
+error, no output, until Kaggle's 12-hour limit stopped them (about 24 GPU hours lost). The most likely cause is the
+attached notebook-output mount under `/kaggle/input` (where the dataset was read from) stopping to answer after about an
+hour, so the dataloader workers waited forever. Every GPU notebook now has three protections:
+
+1. **Local copy of the dataset.** Before relocating, the attached `gen2_data/` is copied to local disk (`/kaggle/tmp`,
+   else `/tmp`; never `/kaggle/working`, so the output does not grow). File names and sizes are checked, and the copy
+   time and size are printed. The copy reads the mount too, so it stops with a `TimeoutError` if no file arrives for
+   2 minutes, instead of hanging. Training then reads only the local copy. The images are the same bytes, so the results
+   are the same as before.
+2. **Stall watchdog** (`src/watchdog_run.py`). Every script runs through `run()`, which streams its output and watches
+   the output and the run folder (or search log). After 20 minutes with neither, it kills the script and its dataloader
+   workers (the whole process group) and starts it again, at most 3 times. A normal error still stops the cell at once.
+   The setup cell first runs two watchdog tests (about 10 s) to check that killing works on the Kaggle machine.
+3. **Resume.** A restarted `search.py` replays its log; `train_final.py --resume` continues `weights/last.pt` with
+   Ultralytics' resume, after checking that the checkpoint's training arguments (data, epochs, imgsz, batch, seed,
+   optimizer, the six hyperparameters, ...) equal the ones of this run. Without a `last.pt` it is a normal run. The JSON
+   then records `"resumed": true` and `"resumed_from_epoch"`. A resumed training continues the same weights, optimizer
+   state and epoch counter, but it is not bit-identical to an uninterrupted one (the data order after the restart
+   differs), which matters only for exact reproduction.
+
+Not changed on purpose: the dataloader `workers` (Ultralytics' default 8) and every other training argument, so the
+results stay comparable with Arm A and the PSO search, which already ran. Passing a lower `workers` value is a possible
+further safeguard for future work.

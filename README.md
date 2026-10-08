@@ -320,12 +320,13 @@ SwarmSort/
 ├── src/
 │   ├── verify_dataset.py    Phase 1: dataset checks, re-split, data.yaml
 │   ├── training.py          shared training helpers; builds the stratified 40% proxy subset
-│   ├── train_final.py       one full 100-epoch training (Arm A, or a search winner)
+│   ├── train_final.py       one full 100-epoch training (Arm A, or a search winner); --resume continues last.pt
 │   ├── proxy_check.py       Phase 2: does the proxy rank like a longer training?
 │   ├── search_space.py      the 6-D search space (bounds, log scale, encode/decode)
 │   ├── pso.py               the hand-written PSO (ask/tell)
 │   ├── pso_benchmark.py     PSO check on Sphere and Rastrigin
 │   ├── search.py            Phase 4: one search arm (PSO or random), resumable
+│   ├── watchdog_run.py      Kaggle freeze protection: stall watchdog with retry, local dataset copy
 │   ├── plot_search.py       convergence plot of both arms
 │   └── evaluate.py          Phase 5: final test evaluation with paired bootstrap
 ├── tests/                   unit tests (PSO, search, evaluation, plotting, app)
@@ -341,7 +342,7 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt     # on Linux/macOS: .venv/bin/python
 
 .venv/Scripts/python -m streamlit run app/app.py             # the demo (no dataset needed)
-.venv/Scripts/python -m unittest discover -s tests -v        # the tests (no training)
+.venv/Scripts/python -m unittest discover -s tests -v        # the tests (one 1-minute CPU training if the dataset is present; SWARMSORT_SKIP_SLOW=1 skips it)
 ```
 
 The demo needs no dataset or GPU. The "random test image" input appears only when the dataset is present locally (see Phase 1 below).
