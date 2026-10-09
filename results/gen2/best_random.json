@@ -1,0 +1,28 @@
+{
+  "method": "random",
+  "source_log": "results/gen2/search_random.json",
+  "index": 2,
+  "label": "s03",
+  "map50": 0.33401,
+  "map50_95": 0.2255,
+  "params": {
+    "lr0": 0.00445126,
+    "lrf": 0.050615,
+    "momentum": 0.881757,
+    "weight_decay": 0.00018192,
+    "mosaic": 0.927407,
+    "scale": 0.339145
+  },
+  "vector": [
+    -2.351517,
+    0.050615,
+    0.881757,
+    -3.74012,
+    0.927407,
+    0.339145
+  ],
+  "proxy_epochs": 12,
+  "imgsz": 640,
+  "seed": 123,
+  "smoke": false
+}
