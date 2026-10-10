@@ -388,7 +388,7 @@ class TestCheckpointCheck(unittest.TestCase):
             arms = {"A": {"name": "Defaults", "model": "a.pt", "config": str(cfg), "val_json": str(cfg),
                           "epochs_csv": None, "epochs": None, "imgsz": None}}
             self.assertEqual(evaluate.expected_schedule("A", arms), (60, 640))  # read from the arm's JSON
-            self.assertEqual(evaluate.eval_imgsz(["A"], arms), 640)
+            self.assertEqual(evaluate.eval_imgsizes(["A"], arms), {"A": 640})
             models = {"A": Path("a.pt")}
             evaluate.run_checks(models, {"A": self.info(epochs=60, imgsz=640, names=CLASSES7)}, CLASSES7, arms)
             with self.assertRaises(SystemExit) as cm:
@@ -403,13 +403,42 @@ class TestCheckpointCheck(unittest.TestCase):
                 evaluate.run_checks(models, {"A": self.info(epochs=60, imgsz=640)}, CLASSES, unknown)
             self.assertIn("expected epochs is unknown", str(cm.exception.code))
 
-    def test_schedule_of_other_labels_and_eval_imgsz(self):
+    def test_schedule_of_other_labels_and_eval_imgsizes(self):
         self.assertEqual(evaluate.expected_schedule("X"), (100, 416))  # Gen 1: what every arm shares
-        self.assertEqual(evaluate.eval_imgsz(["A", "B", "C", "X"]), 416)
+        sizes = evaluate.eval_imgsizes(["A", "B", "C", "X"])
+        self.assertEqual(sizes, {"A": 416, "B": 416, "C": 416, "X": 416})
+        self.assertEqual(evaluate.imgsz_setting(sizes), 416)  # one number in the report, as before
+
+    def test_per_arm_imgsz(self):
+        """Arms trained at different sizes are each scored at their own size instead of stopping the run."""
         mixed = {"A": {**evaluate.GEN1_ARMS["A"], "imgsz": 640}, "B": evaluate.GEN1_ARMS["B"]}
         self.assertEqual(evaluate.expected_schedule("X", mixed), (100, None))
+        sizes = evaluate.eval_imgsizes(["A", "B"], mixed)
+        self.assertEqual(sizes, {"A": 640, "B": 416})
+        self.assertEqual(evaluate.imgsz_setting(sizes), {"A": 640, "B": 416})
+        # a label outside the table, whose size the table cannot tell: the checkpoint's own imgsz, else 416
+        infos = {"X": self.info(imgsz=320)}
+        self.assertEqual(evaluate.eval_imgsizes(["A", "X"], mixed, infos), {"A": 640, "X": 320})
+        self.assertEqual(evaluate.eval_imgsizes(["X"], mixed), {"X": 416})
+
+    def test_prefix_class_names_only_with_classes(self):
+        """A 7-class Gen 2 checkpoint (OTHER last) on a 6-class yaml passes only when --classes is used."""
+        gen2 = self.info(names=CLASSES7, epochs=100, imgsz=640)
+        problems = evaluate.check_checkpoint(gen2, CLASSES, None, epochs=100, imgsz=640)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("the --data yaml has 6", problems[0])
+        self.assertEqual(evaluate.check_checkpoint(gen2, CLASSES, None, epochs=100, imgsz=640, prefix_ok=True), [])
+        self.assertEqual(evaluate.check_checkpoint(self.info(), CLASSES, None, prefix_ok=True), [])  # Gen 1: equal
+        other_first = self.info(names=["OTHER", *CLASSES])  # the same names, but shifted: never a match
+        problems = evaluate.check_checkpoint(other_first, CLASSES, None, prefix_ok=True)
+        self.assertTrue(problems and "do not start with those" in problems[0])
+        fewer = self.info(names=CLASSES[:5])  # a model with fewer classes is not a prefix match either
+        self.assertEqual(len(evaluate.check_checkpoint(fewer, CLASSES, None, prefix_ok=True)), 1)
+        models = {"G2A": Path("g2a.pt")}
         with self.assertRaises(SystemExit):
-            evaluate.eval_imgsz(["A", "B"], mixed)
+            evaluate.run_checks(models, {"G2A": gen2}, CLASSES, {})
+        with contextlib.redirect_stdout(io.StringIO()):
+            evaluate.run_checks(models, {"G2A": gen2}, CLASSES, {}, prefix_ok=True)
 
 
 class TestArmsConfig(unittest.TestCase):
@@ -461,6 +490,38 @@ class TestArmsConfig(unittest.TestCase):
         self.assertEqual(args.models["C"], evaluate.REPO / "results/gen2/runs/arm_c/weights/best.pt")
         self.assertEqual(evaluate.display_name("B", args.arms_table), "Random search")
 
+    def test_gen1_vs_gen2_table(self):
+        path = evaluate.REPO / "configs" / "gen2" / "arms_gen1_vs_gen2.yaml"
+        arms = evaluate.load_arms(path)
+        self.assertEqual(list(arms), ["G1A", "G1B", "G1C", "G2A", "G2B", "G2C"])
+        self.assertEqual([arms[label]["name"] for label in arms],
+                         ["Gen 1 Defaults", "Gen 1 Random search", "Gen 1 PSO",
+                          "Gen 2 Defaults", "Gen 2 Random search", "Gen 2 PSO"])
+        for x, cfg, val in (("a", "baseline", "baseline"), ("b", "best_random", "arm_b"), ("c", "best_pso", "arm_c")):
+            g1, g2 = arms[f"G1{x.upper()}"], arms[f"G2{x.upper()}"]
+            self.assertEqual(g1["model"], f"app/models/arm_{x}.pt")
+            self.assertEqual((g1["config"], g1["val_json"]), (f"results/{cfg}.json", f"results/{val}.json"))
+            self.assertEqual(evaluate.expected_schedule(f"G1{x.upper()}", arms), (100, 416))
+            gen2 = evaluate.load_arms(evaluate.REPO / "configs" / "gen2" / "arms.yaml")[x.upper()]
+            self.assertEqual({k: g2[k] for k in ("model", "config", "val_json")},
+                             {k: gen2[k] for k in ("model", "config", "val_json")})  # the same as arms.yaml
+            self.assertEqual(evaluate.expected_schedule(f"G2{x.upper()}", arms), (100, 640))  # from its val_json
+            self.assertEqual(evaluate.expected_params(f"G2{x.upper()}", arms), evaluate.expected_params(x.upper(), {
+                x.upper(): gen2}))
+            self.assertIsNone(g1["epochs_csv"])
+            self.assertIsNone(g2["epochs_csv"])
+        self.assertEqual(evaluate.expected_params("G1A", arms), evaluate.expected_params("A"))
+        sizes = evaluate.eval_imgsizes(list(arms), arms)
+        self.assertEqual(sizes, {"G1A": 416, "G1B": 416, "G1C": 416, "G2A": 640, "G2B": 640, "G2C": 640})
+        self.assertEqual(evaluate.arm_title("G2C", arms), "G2C: Gen 2 PSO")
+        self.assertIn("gen2_arm_b_best.pt", evaluate.missing_model_message("G2B", arms["G2B"]["model"], arms))
+        colors = evaluate.model_colors(list(arms))
+        self.assertEqual(len(set(colors.values())), 6)  # six different colours
+        self.assertEqual(evaluate.model_colors(["A", "B", "X"]), {"A": "#1baf7a", "B": "#eb6834", "X": "#eda100"})
+        args = evaluate.parse_args(["--arms", str(path), "--split", "val", "--classes", "5", "0", "1", "2", "3", "4"])
+        self.assertEqual(args.classes, [0, 1, 2, 3, 4, 5])
+        self.assertEqual(args.models["G1B"], evaluate.REPO / "app/models/arm_b.pt")
+
     def test_minimal_arm_and_custom_names(self):
         arms = evaluate.load_arms(self.write("a.yaml", {"arms": {"A": {"model": "a.pt", "imgsz": 640},
                                                                  "G2": {"name": "PSO gen 2", "model": "c.pt"}}}))
@@ -480,6 +541,117 @@ class TestArmsConfig(unittest.TestCase):
         for k, (obj, message) in enumerate(cases):
             self.assertIn(message, self.parse_error(["--arms", str(self.write(f"bad{k}.yaml", obj))]))
         self.assertIn("--arms", self.parse_error(["--arms", str(self.dir / "missing.yaml")]))
+
+
+class TestClassesFilter(unittest.TestCase):
+    """--classes reaches Ultralytics' validator, its NMS, the latency runs and the sample predictions."""
+
+    def test_parse(self):
+        self.assertIsNone(evaluate.parse_args([]).classes)
+        self.assertEqual(evaluate.parse_args(["--classes", "3", "1", "1"]).classes, [1, 3])
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            evaluate.parse_args(["--classes", "-1"])
+        self.assertIn("class indices", err.getvalue())
+
+    def test_classes_outside_the_data_yaml_stop_the_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "data6.yaml"
+            data.write_text(yaml.safe_dump({"names": CLASSES}))
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                evaluate.main(["--data", str(data), "--classes", "0", "6", "--split", "val", "--out-dir", tmp])
+            self.assertIn("only 6 classes", str(cm.exception.code))
+
+    def test_passthrough_to_validation(self):
+        seen = {}
+
+        class FakeValidator:
+            def __init__(self, args):
+                seen["args"] = args
+
+            def __call__(self, model):
+                seen["model"] = model
+
+        real = evaluate.RecordingValidator
+        evaluate.RecordingValidator = FakeValidator
+        try:
+            run_dir = Path(tempfile.gettempdir()) / "eval_x"
+            evaluate.validate("m.pt", "d.yaml", "test", 300, None, run_dir, 640, [0, 1, 2, 3, 4, 5])
+            self.assertEqual(seen["args"]["classes"], [0, 1, 2, 3, 4, 5])
+            self.assertEqual(seen["args"]["imgsz"], 640)
+            evaluate.validate("m.pt", "d.yaml", "test", 300, None, run_dir)
+            self.assertNotIn("classes", seen["args"])  # default: exactly the arguments as before
+            self.assertEqual(seen["args"]["imgsz"], 416)
+        finally:
+            evaluate.RecordingValidator = real
+
+    def test_passthrough_to_prediction(self):
+        calls = []
+
+        class FakeBoxes:
+            cls = conf = __import__("torch").zeros(0)
+            xyxy = __import__("torch").zeros((0, 4))
+
+        class FakeModel:
+            def predict(self, im, **kwargs):
+                calls.append(kwargs)
+                return [SimpleNamespace(boxes=FakeBoxes())]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            img = Path(tmp) / "x.jpg"
+            import cv2
+            cv2.imwrite(str(img), np.zeros((32, 32, 3), dtype=np.uint8))
+            evaluate.predict_boxes(FakeModel(), img, None, 640, [0, 1])
+            self.assertEqual((calls[-1]["classes"], calls[-1]["imgsz"]), ([0, 1], 640))
+            evaluate.predict_boxes(FakeModel(), img, None)
+            self.assertNotIn("classes", calls[-1])
+            speed = evaluate.measure_latency(FakeModel(), [img] * 3, None, Path(tmp) / "run", 640, [0, 1, 2])
+            self.assertTrue(all(c["classes"] == [0, 1, 2] and c["imgsz"] == 640 for c in calls[2:]))
+            self.assertEqual(len(calls), 2 + 3 + 3)  # 3 warm-up and 3 timed predictions
+            self.assertEqual(speed["imgsz"], 640)
+
+    def test_validator_nms_keeps_only_the_given_classes(self):
+        """Ultralytics' own postprocess ignores args.classes; the recording validator applies it in the NMS, and
+        without classes it gives exactly Ultralytics' output."""
+        import torch
+
+        torch.manual_seed(0)
+        n = 100
+        xy = torch.rand(1, 2, n) * 600
+        wh = torch.rand(1, 2, n) * 80 + 10
+        scores = torch.rand(1, 7, n) ** 6
+        preds = torch.cat([xy, wh, scores], 1)  # (batch, 4 + 7 classes, anchors), as YOLOv8's raw output
+        with tempfile.TemporaryDirectory() as tmp:
+            v = evaluate.RecordingValidator(save_dir=Path(tmp),
+                                            args=dict(task="detect", mode="val", conf=0.2, iou=0.7, max_det=300))
+        v.end2end, v.nc = False, 7
+        plain = v.postprocess(preds)[0]
+        reference = evaluate.DetectionValidator.postprocess(v, preds)[0]
+        for key in ("bboxes", "conf", "cls"):
+            self.assertTrue(torch.equal(plain[key], reference[key]))
+        self.assertIn(6, plain["cls"].int().tolist())  # OTHER is predicted without the filter
+        v.args.classes = [0, 1, 2, 3, 4, 5]
+        kept = v.postprocess(preds)[0]
+        self.assertNotIn(6, kept["cls"].int().tolist())
+        self.assertEqual(set(kept["cls"].int().tolist()), {0, 1, 2, 3, 4, 5})
+        # class-aware NMS: the other classes' boxes are exactly those of the unfiltered run (max_det not reached)
+        self.assertLess(len(plain["cls"]), 300)
+        same = plain["cls"] != 6
+        self.assertTrue(torch.equal(kept["conf"].sort().values, plain["conf"][same].sort().values))
+
+    def test_markdown_with_per_arm_imgsz_and_classes(self):
+        report = TestReport.fake_report(None, ["G1A", "G2A"])
+        report["settings"].update({"imgsz": {"G1A": 416, "G2A": 640}, "classes": [0, 1, 2, 3, 4, 5]})
+        arms = {"G1A": {"name": "Gen 1 Defaults"}, "G2A": {"name": "Gen 2 Defaults"}}
+        markdown = evaluate.comparison_markdown(report, arms)
+        self.assertIn("own training image size, i.e. as deployed: G1A 416, G2A 640", markdown)
+        self.assertIn("restricted to classes [0, 1, 2, 3, 4, 5]", markdown)
+        self.assertIn("Gen 2 Defaults − Gen 1 Defaults (G2A−G1A)", markdown)
+        plain = evaluate.comparison_markdown(TestReport.fake_report(None, ["A", "B"]))
+        self.assertIn("latency at imgsz 416 on CPU test.\n", plain)  # one size: the header as before
+        with tempfile.TemporaryDirectory() as tmp:  # per-class plot with a 7-class model first and a 6-class one
+            seven = {**report["models"]["G2A"], "per_class": {c: {"ap50": 0.4, "ap50_95": 0.2} for c in CLASSES7}}
+            evaluate.plot_per_class({"G2A": seven, "G1A": report["models"]["G1A"]}, "val", Path(tmp) / "p.png", arms)
+            self.assertTrue((Path(tmp) / "p.png").is_file())
 
 
 class TestTag(unittest.TestCase):

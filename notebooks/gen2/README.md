@@ -1,12 +1,13 @@
 # Generation 2 Kaggle notebooks
 
-These seven notebooks run SwarmSort Generation 2 on Kaggle from start to finish:
+These eight notebooks run SwarmSort Generation 2 on Kaggle from start to finish:
 
 1. build the merged 7-class dataset (TACO + HITL + a Gen 1 subsample + optional DWSD);
 2. train Arm A (the Ultralytics defaults);
 3. run the two hyperparameter searches (Arm B: random search, Arm C: PSO);
 4. fully train the two search winners;
-5. score all three arms once on the test split, overall and per domain (studio / real_world / india).
+5. score all three arms once on the test split, overall and per domain (studio / real_world / india);
+6. compare Gen 1 and Gen 2 (all six arms) on the same real-world and studio test images, on the 6 shared classes.
 
 The recipe is the same as Gen 1, with two changes: images are 640 px and there are 7 classes (Gen 1's six plus OTHER).
 Every notebook clones `https://github.com/Shreyansh303/SwarmSort` (branch main). **Push all local commits before you
@@ -51,6 +52,7 @@ What happened when the notebooks were run (dates in UTC, from the `finished_at` 
 | `g2_4_arm_b` | Done in one run (2026-10-09) | `arm_b.json`: val mAP@50 0.4734, 2.07 h |
 | `g2_5_arm_c` | Froze on 2026-10-08 after 55 of 100 epochs. A new version salvaged the run folder, resumed from epoch 55 (`"resumed_from_epoch": 55`) and finished on 2026-10-09 | `arm_c.json`: val mAP@50 0.4662, 1.60 h of training in total |
 | `g2_6_evaluate` | The first version ran 3.6 h without finishing and was cancelled (slow bootstrap). After the fix (commit c1a18c8), Kaggle version 357148735 finished on 2026-10-10 in about 7 minutes, including the separate DWSD-only build for india | `test_{all,studio,real_world,india}_results.json`, `test_domains.md`: test mAP@50 on all A 0.479, B 0.497, C 0.500; studio 0.571 / 0.595 / 0.590; real_world 0.310 / 0.298 / 0.310; india 0.027 / 0.023 / 0.027 |
+| `g2_7_gen1_vs_gen2` | Not run yet | `test_g1g2_real_world_*`, `test_g1g2_studio_*`, `test_g1g2_summary.md` |
 
 The two freezes cost about 24 GPU hours; see "Freeze protection" below. The partial outputs of the frozen versions are kept in `results/gen2/salvage/`.
 
@@ -65,6 +67,7 @@ The two freezes cost about 24 GPU hours; see "Freeze protection" below. The part
 | `g2_4_arm_b` | GPU T4 x2 | output of `g2_0_build_dataset`, plus `g2_3_search_random` if `best_random.json` is not committed (and, to continue a stopped run, an earlier version of itself) | `SwarmSort/results/gen2/arm_b.json`, `arm_b_epochs.csv`, `gen2_arm_b_best.pt` |
 | `g2_5_arm_c` | GPU T4 x2 | output of `g2_0_build_dataset`, plus `g2_2_search_pso` if `best_pso.json` is not committed (and, to continue a stopped run, an earlier version of itself) | `SwarmSort/results/gen2/arm_c.json`, `arm_c_epochs.csv`, `gen2_arm_c_best.pt` |
 | `g2_6_evaluate` | GPU T4 x2 | outputs of `g2_0_build_dataset`, `g2_1_arm_a`, `g2_4_arm_b`, `g2_5_arm_c`, and your private DWSD dataset (optional, if the g2_0 build has no India test set) | `SwarmSort/results/gen2/test_<tag>_results.json`, `test_<tag>_comparison.md`, `test_domains.md`, `plots/`, and `build_report_india.json` if DWSD was built there |
+| `g2_7_gen1_vs_gen2` | GPU T4 x2 | outputs of `g2_0_build_dataset`, `g2_1_arm_a`, `g2_4_arm_b`, `g2_5_arm_c` (the Gen 1 weights come with the clone, `app/models/`) | `SwarmSort/results/gen2/test_g1g2_{real_world,studio}_results.json`, `test_g1g2_{real_world,studio}_comparison.md`, `test_g1g2_summary.md`, `plots/test_g1g2_*` |
 
 Every notebook ends with a "Files to download / where they go locally" table. In short, everything goes into the
 local `results/gen2/`, except `split.csv`, which goes to `configs/gen2/split.csv`. A `.pt` file downloads as a `.zip`:

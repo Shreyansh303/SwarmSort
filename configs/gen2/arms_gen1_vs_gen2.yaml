@@ -1,0 +1,68 @@
+# Generation 1 vs Generation 2: the six trained arms on the same test images, read by src/evaluate.py --arms.
+# Used by notebooks/gen2/g2_7_gen1_vs_gen2.ipynb:
+#
+#   python src/compare_generations.py subset --data <gen2 cfg>/data_test_real_world.yaml --split test \
+#       --classes 0-5 --out <work>/g1g2_real_world     # labels without OTHER -> <work>/g1g2_real_world/data.yaml
+#   python src/evaluate.py --arms configs/gen2/arms_gen1_vs_gen2.yaml --data <work>/g1g2_real_world/data.yaml \
+#       --split test --classes 0 1 2 3 4 5 --tag g1g2_real_world --out-dir results/gen2
+#
+# Why it is fair:
+#   - every model is scored on the SAME images, with the labels restricted to the 6 classes both generations know
+#     (class 6, OTHER, is removed from the labels; images that only had OTHER stay in, with no objects);
+#   - Gen 2's OTHER predictions are dropped by --classes 0..5 (Ultralytics' classes filter in the NMS);
+#   - each model runs at its own training image size (Gen 1 416, Gen 2 640), i.e. as deployed; evaluate.py says so
+#     in the report header.
+# With --classes, evaluate.py's checkpoint check accepts the 7-class Gen 2 checkpoints because their class names
+# start with the 6 names of the data yaml; epochs, imgsz and the six hyperparameters are still checked per arm.
+#
+# Models: Gen 1 is committed in app/models/ (byte copies of results/runs/{baseline,arm_b,arm_c}/weights/best.pt);
+# Gen 2 is copied by the notebook from the Kaggle outputs gen2_arm_{a,b,c}_best.pt to the paths below (the same
+# paths as configs/gen2/arms.yaml).
+# epochs_csv is left out on purpose: the two generations' training curves are on different validation sets, so one
+# combined training-curves plot would mislead (each generation's own plot already exists).
+# The val column of the report comes from each arm's own training JSON (Gen 1: 6-class studio val set, Gen 2:
+# 7-class mixed val set), so it is not comparable across generations; the test columns are.
+
+arms:
+  G1A:
+    name: Gen 1 Defaults
+    model: app/models/arm_a.pt
+    config: results/baseline.json
+    val_json: results/baseline.json
+    epochs: 100
+    imgsz: 416
+  G1B:
+    name: Gen 1 Random search
+    model: app/models/arm_b.pt
+    config: results/best_random.json
+    val_json: results/arm_b.json
+    epochs: 100
+    imgsz: 416
+  G1C:
+    name: Gen 1 PSO
+    model: app/models/arm_c.pt
+    config: results/best_pso.json
+    val_json: results/arm_c.json
+    epochs: 100
+    imgsz: 416
+  G2A:
+    name: Gen 2 Defaults
+    model: results/gen2/runs/arm_a/weights/best.pt
+    config: results/gen2/arm_a.json
+    val_json: results/gen2/arm_a.json
+    notebook: notebooks/gen2/g2_1_arm_a.ipynb
+    download: gen2_arm_a_best.pt
+  G2B:
+    name: Gen 2 Random search
+    model: results/gen2/runs/arm_b/weights/best.pt
+    config: results/gen2/best_random.json
+    val_json: results/gen2/arm_b.json
+    notebook: notebooks/gen2/g2_4_arm_b.ipynb
+    download: gen2_arm_b_best.pt
+  G2C:
+    name: Gen 2 PSO
+    model: results/gen2/runs/arm_c/weights/best.pt
+    config: results/gen2/best_pso.json
+    val_json: results/gen2/arm_c.json
+    notebook: notebooks/gen2/g2_5_arm_c.ipynb
+    download: gen2_arm_c_best.pt

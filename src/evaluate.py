@@ -3,6 +3,7 @@
     python src/evaluate.py                                # A, B and C on the test split -> results/test_*
     python src/evaluate.py --models A=results/runs/baseline/weights/best.pt --split val   # checks use val only
     python src/evaluate.py --arms configs/gen2/arms.yaml --data <gen2>/data_test_real_world.yaml --out-dir results/gen2
+    python src/evaluate.py --arms configs/gen2/arms_gen1_vs_gen2.yaml --data <6-class subset>/data.yaml --classes 0 1 2 3 4 5
 
 The arms table says, per label (A, B, C): display name, model path, expected-config JSON ("params"), val-metrics
 JSON, epochs CSV, and the epochs and imgsz the checkpoint must have (if left out, read from the val-metrics JSON).
@@ -11,9 +12,14 @@ Without --arms it is the Generation 1 table (GEN1_ARMS below: 100 epochs at imgs
 Steps:
   1. Checkpoint check: each best.pt must have the class names of --data, and its arm's epochs, imgsz and
      hyperparameters (Gen 1, A: results/baseline.json, B: results/best_random.json, C: results/best_pso.json).
-  2. Metrics: Ultralytics' own validator with the training-time validation settings (the arms' imgsz, conf 0.001,
-     iou 0.7, rect batches of 32, max_det from the checkpoint). It also records every image's statistics.
-  3. Speed: median batch-1 latency over 100 images of the split (10 warm-up predictions first).
+     With --classes, a checkpoint whose class names START WITH those of --data also passes (a Gen 2 model with
+     OTHER as its 7th class, scored on a 6-class yaml): its extra classes are never predicted.
+  2. Metrics: Ultralytics' own validator with the training-time validation settings (each arm's own training
+     imgsz, conf 0.001, iou 0.7, rect batches of 32, max_det from the checkpoint). It also records every image's
+     statistics. With --classes, only those classes are kept in the NMS (the same filter as Ultralytics' predict).
+  3. Speed: median batch-1 latency over 100 images of the split (10 warm-up predictions first), at each arm's imgsz.
+     Models trained at different image sizes (Gen 1 416, Gen 2 640) are each validated and timed at their own size,
+     i.e. as deployed; the report says so.
   4. Paired bootstrap: resample the images with replacement (the same images for every model) to get 95% CIs
      of mAP@50 and mAP@50-95 and of every pairwise difference. A difference whose CI contains 0 is not significant.
      Each resample is scored as image weights (draw counts) on predictions sorted once: the same numbers as
@@ -44,6 +50,7 @@ import numpy as np  # noqa: E402
 import yaml  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 from ultralytics.models.yolo.detect import DetectionValidator  # noqa: E402
+from ultralytics.utils import nms  # noqa: E402
 from ultralytics.utils.metrics import DetMetrics, ap_per_class  # noqa: E402
 
 from search_space import NAMES  # noqa: E402
@@ -96,7 +103,10 @@ def arm_title(label, arms=GEN1_ARMS):
 
 
 def model_colors(labels):
-    extra = iter(EXTRA_COLORS * 4)
+    """A/B/C keep their colours; other labels take the extra colours, then the A/B/C colours not in use (so six
+    labels such as G1A ... G2C get six different colours)."""
+    spare = [c for label, c in MODEL_COLORS.items() if label not in labels]
+    extra = iter((EXTRA_COLORS + spare) * 4)
     return {label: MODEL_COLORS.get(label) or next(extra) for label in labels}
 
 
@@ -174,7 +184,16 @@ def parse_args(argv=None):
     ap.add_argument("--bootstrap", type=int, default=1000, help="number of paired bootstrap resamples")
     ap.add_argument("--seed", type=int, default=0, help="seed of the bootstrap and of the image choices")
     ap.add_argument("--skip-checks", action="store_true", help="skip the checkpoint config check")
+    ap.add_argument("--classes", nargs="+", type=int, metavar="N",
+                    help="keep only these predicted classes (Ultralytics' classes filter, in validation, timing and "
+                         "samples), e.g. 0 1 2 3 4 5 to score a 7-class Gen 2 model on a 6-class yaml; each must be a "
+                         "class of --data. A checkpoint whose class names start with those of --data then passes the "
+                         "check (default: all classes)")
     args = ap.parse_args(argv)
+    if args.classes is not None:
+        if min(args.classes) < 0:
+            ap.error("--classes must be class indices (0 or more)")
+        args.classes = sorted(set(args.classes))
     if args.arms is None:
         args.arms_table = GEN1_ARMS
     else:
@@ -277,22 +296,41 @@ def expected_schedule(label, arms=GEN1_ARMS):
     return tuple(shared)
 
 
-def eval_imgsz(labels, arms=GEN1_ARMS):
-    """The one image size every model of this run is validated and timed at: their arms' imgsz (Gen 1: 416)."""
-    sizes = {expected_schedule(label, arms)[1] for label in labels} - {None}
-    if len(sizes) > 1:
-        raise SystemExit(f"The models were trained at different image sizes {sorted(sizes)}; "
-                         f"evaluate them in separate runs.")
-    return sizes.pop() if sizes else IMGSZ
+def eval_imgsizes(labels, arms=GEN1_ARMS, infos=None):
+    """{label: image size} each model is validated and timed at: its arm's training imgsz (Gen 1: 416, Gen 2: 640),
+    so models trained at different sizes are each scored as deployed. A label whose imgsz is unknown (not in the
+    table, and the table's arms differ): the imgsz recorded in its checkpoint (infos), else 416."""
+    sizes = {}
+    for label in labels:
+        size = expected_schedule(label, arms)[1]
+        if size is None and infos is not None:
+            size = infos.get(label, {}).get("train_args", {}).get("imgsz")
+        sizes[label] = int(size) if isinstance(size, int) else IMGSZ
+    return sizes
 
 
-def check_checkpoint(info, class_names, expected=None, epochs=EPOCHS, imgsz=IMGSZ):
+def imgsz_setting(sizes):
+    """The report's settings.imgsz: one number if every model used it (as before), else {label: imgsz}."""
+    values = set(sizes.values())
+    return values.pop() if len(values) == 1 else dict(sizes)
+
+
+def class_names_match(names, class_names, prefix_ok=False):
+    """The checkpoint's class names equal those of --data or, with prefix_ok, start with them (same indices)."""
+    names, class_names = list(names), list(class_names)
+    return names == class_names or (prefix_ok and names[:len(class_names)] == class_names)
+
+
+def check_checkpoint(info, class_names, expected=None, epochs=EPOCHS, imgsz=IMGSZ, prefix_ok=False):
     """List of problems with one checkpoint (empty = fine). expected: the arm's 6 hyperparameters, or None.
-    epochs / imgsz: what the checkpoint must have been trained with (None = not checked)."""
+    epochs / imgsz: what the checkpoint must have been trained with (None = not checked).
+    prefix_ok: the class names may also start with those of --data (only when --classes keeps the predictions to
+    the data's classes, so the extra classes are never predicted)."""
     problems = []
-    if info["names"] != list(class_names):
+    if not class_names_match(info["names"], class_names, prefix_ok):
         problems.append(f"it has {len(info['names'])} classes {info['names'][:8]}{' ...' * (len(info['names']) > 8)}"
-                        f", but the --data yaml has {len(class_names)}: {list(class_names)}")
+                        f", but the --data yaml has {len(class_names)}: {list(class_names)}"
+                        + (" (and they do not start with those)" if prefix_ok else ""))
     train_args = info["train_args"]
     for key, want in (("epochs", epochs), ("imgsz", imgsz)):
         if want is not None and train_args.get(key) != want:
@@ -305,11 +343,11 @@ def check_checkpoint(info, class_names, expected=None, epochs=EPOCHS, imgsz=IMGS
     return problems
 
 
-def run_checks(models, infos, class_names, arms=GEN1_ARMS):
+def run_checks(models, infos, class_names, arms=GEN1_ARMS, prefix_ok=False):
     report = []
     for label, path in models.items():
         epochs, imgsz = expected_schedule(label, arms)
-        problems = check_checkpoint(infos[label], class_names, expected_params(label, arms), epochs, imgsz)
+        problems = check_checkpoint(infos[label], class_names, expected_params(label, arms), epochs, imgsz, prefix_ok)
         if label in arms:
             problems += [f"the expected {key} is unknown: give it in the arms table or in the arm's val_json"
                          for key, value in (("epochs", epochs), ("imgsz", imgsz)) if value is None]
@@ -344,21 +382,47 @@ class RecordingDetMetrics(DetMetrics):
 
 
 class RecordingValidator(DetectionValidator):
-    """Ultralytics' DetectionValidator; the only change is the recording metrics object above."""
+    """Ultralytics' DetectionValidator with the recording metrics object above, and the classes filter in the NMS.
+
+    Ultralytics 8.4.169's DetectionValidator.postprocess does not pass args.classes to the NMS (its predictor does),
+    so val would silently ignore classes=. With args.classes set, postprocess below is Ultralytics' own with
+    classes= added: the same filter as predict(classes=...). Without it, Ultralytics' postprocess runs unchanged.
+    Every later step (metrics, per-image statistics, confusion matrix) only sees the kept predictions.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.metrics = RecordingDetMetrics()
 
+    def postprocess(self, preds):
+        if getattr(self.args, "classes", None) is None:
+            return super().postprocess(preds)
+        outputs = nms.non_max_suppression(
+            preds,
+            self.args.conf,
+            self.args.iou,
+            nc=0 if self.args.task == "detect" else self.nc,
+            multi_label=True,
+            agnostic=self.args.single_cls or self.args.agnostic_nms,
+            max_det=self.args.max_det,
+            end2end=self.end2end,
+            rotated=self.args.task == "obb",
+            classes=self.args.classes,
+        )
+        return [{"bboxes": x[:, :4], "conf": x[:, 4], "cls": x[:, 5], "extra": x[:, 6:]} for x in outputs]
 
-def validate(path, data, split, max_det, device, run_dir, imgsz=IMGSZ):
-    """Validate one checkpoint like the trainer's final validation of best.pt; returns the finished validator."""
+
+def validate(path, data, split, max_det, device, run_dir, imgsz=IMGSZ, classes=None):
+    """Validate one checkpoint like the trainer's final validation of best.pt; returns the finished validator.
+    classes: keep only these predicted classes (None = all)."""
     args = dict(model=str(path), data=str(data), split=split, imgsz=imgsz, batch=VAL_BATCH, rect=True, iou=0.7,
                 max_det=max_det, plots=True, project=str(run_dir.parent), name=run_dir.name, exist_ok=True,
                 mode="val", task="detect")
     # conf stays unset, as in training: metrics then use conf 0.001 and the confusion matrix conf 0.25
     if device is not None:
         args["device"] = device
+    if classes is not None:
+        args["classes"] = list(classes)
     validator = RecordingValidator(args=args)
     validator(model=str(path))
     return validator
@@ -735,7 +799,7 @@ def choose(items, k, seed):
     return [items[i] for i in sorted(picks)]
 
 
-def measure_latency(model, image_paths, device, run_dir, imgsz=IMGSZ):
+def measure_latency(model, image_paths, device, run_dir, imgsz=IMGSZ, classes=None):
     """Median batch-1 latency (preprocess + inference + NMS) on in-memory images, after warm-up predictions."""
     import cv2
     import torch
@@ -745,6 +809,8 @@ def measure_latency(model, image_paths, device, run_dir, imgsz=IMGSZ):
                   name=run_dir.name, exist_ok=True)
     if device is not None:
         kwargs["device"] = device
+    if classes is not None:
+        kwargs["classes"] = list(classes)
     sync = torch.cuda.synchronize if torch.cuda.is_available() else (lambda: None)
     for im in images[:LATENCY_WARMUP]:
         model.predict(im, **kwargs)
@@ -786,10 +852,12 @@ def read_ground_truth(image_path, width, height):
     return cls, xyxy
 
 
-def predict_boxes(model, image_path, device, imgsz=IMGSZ):
+def predict_boxes(model, image_path, device, imgsz=IMGSZ, classes=None):
     kwargs = dict(imgsz=imgsz, conf=SAMPLE_CONF, verbose=False, save=False)
     if device is not None:
         kwargs["device"] = device
+    if classes is not None:
+        kwargs["classes"] = list(classes)
     boxes = model.predict(str(image_path), **kwargs)[0].boxes
     return boxes.cls.cpu().numpy().astype(int), boxes.xyxy.cpu().numpy(), boxes.conf.cpu().numpy()
 
@@ -838,7 +906,7 @@ def plot_per_class(summaries, split, out, arms=GEN1_ARMS):
     fig, ax = plt.subplots(figsize=(max(7.5, 1.2 * len(names) + 0.5 * len(labels)), 4.6))
     x = np.arange(len(names))
     for k, label in enumerate(labels):
-        values = [summaries[label]["per_class"][n]["ap50"] or 0.0 for n in names]
+        values = [summaries[label]["per_class"].get(n, {}).get("ap50") or 0.0 for n in names]
         pos = x - 0.4 + width * (k + 0.5)
         ax.bar(pos, values, width, color=colors[label], edgecolor="white", linewidth=1, label=arm_title(label, arms))
         for xi, v in zip(pos, values):
@@ -939,11 +1007,21 @@ def comparison_markdown(report, arms=GEN1_ARMS):
     n_boot = report["settings"]["bootstrap_resamples"]
     imgsz = report["settings"].get("imgsz", IMGSZ)
     tag = f" ({report['tag']})" if report.get("tag") else ""
+    if isinstance(imgsz, dict):  # models trained at different image sizes: each at its own
+        speed = (f"ms/img: median batch-1 latency on {report['device']}. Each model is validated and timed at its "
+                 f"own training image size, i.e. as deployed: "
+                 + ", ".join(f"{label} {size}" for label, size in imgsz.items())
+                 + ". The val column is each arm's own training validation set, so it can differ between arms.")
+    else:
+        speed = f"ms/img: median batch-1 latency at imgsz {imgsz} on {report['device']}."
+    classes = report["settings"].get("classes")
+    if classes is not None:
+        speed += f" Predictions are restricted to classes {classes} (Ultralytics' classes filter in the NMS)."
     lines = [f"## Final comparison on the {split} split{tag}",
              "",
              f"{report['images']} images, {report['boxes']} boxes. 95% CIs: percentile, {n_boot} paired bootstrap "
              f"resamples of the images (seed {report['settings']['seed']}). P and R at Ultralytics' max-F1 "
-             f"confidence. ms/img: median batch-1 latency at imgsz {imgsz} on {report['device']}.",
+             f"confidence. {speed}",
              "",
              f"| Arm | val mAP@50 (training) | {split} mAP@50 [95% CI] | {split} mAP@50-95 [95% CI] | P | R | ms/img |",
              "|---|---|---|---|---|---|---|"]
@@ -1019,8 +1097,10 @@ class PhaseTimer:
 def score_model(label, path, info, args, run_dir, imgsz=IMGSZ):
     """Validate one model, check its recorded per-image stats against Ultralytics' mAP, and summarize it."""
     max_det = int(info["train_args"].get("max_det", 300))
-    print(f"\n[{label}] validating {rel(path)} (max_det {max_det}, as in its training)")
-    validator = validate(path, args.data, args.split, max_det, args.device, run_dir, imgsz)
+    classes = getattr(args, "classes", None)
+    print(f"\n[{label}] validating {rel(path)} (imgsz {imgsz}, max_det {max_det}, as in its training"
+          + (f"; classes {classes} only" if classes is not None else "") + ")")
+    validator = validate(path, args.data, args.split, max_det, args.device, run_dir, imgsz, classes)
     check = consistency_check(stack_stats(validator.metrics.per_image), float(validator.metrics.box.map50),
                               float(validator.metrics.box.map))  # unrounded Ultralytics values
     print(f"[{label}] consistency check: mAP@50 {check['map50_ultralytics']:.6f} (Ultralytics) vs "
@@ -1068,25 +1148,37 @@ def main(argv=None):
               f"results/ for the final test run.")
 
     # 1. checkpoint files and configs, before any long work
+    if args.classes is not None:
+        outside = [c for c in args.classes if c >= len(class_names)]
+        if outside:
+            raise SystemExit(f"--classes {outside}: the --data yaml has only {len(class_names)} classes "
+                             f"(0-{len(class_names) - 1}: {class_names})")
+        print(f"Predictions restricted to classes {args.classes} ({', '.join(class_names[c] for c in args.classes)})")
     with timer("checks"):
         require_model_files(models, arms)
         infos = {label: load_checkpoint_info(path) for label, path in models.items()}
-        imgsz = eval_imgsz(models, arms)
+        imgsizes = eval_imgsizes(models, arms, infos)
+        if len(set(imgsizes.values())) > 1:
+            print("Models trained at different image sizes: each is validated and timed at its own ("
+                  + ", ".join(f"{label} {size}" for label, size in imgsizes.items()) + ")")
         if args.skip_checks:
             print("Checkpoint config check skipped (--skip-checks)")
         else:
-            run_checks(models, infos, class_names, arms)
+            run_checks(models, infos, class_names, arms, prefix_ok=args.classes is not None)
             schedules = ", ".join(f"{label}: {epochs} epochs at imgsz {size}"
                                   for label, (epochs, size) in ((lb, expected_schedule(lb, arms)) for lb in models))
-            print(f"Checkpoint check passed: {len(class_names)} classes, {schedules}, and each arm's "
-                  f"hyperparameters")
+            extra = sorted({len(infos[label]["names"]) for label in models} - {len(class_names)})
+            print(f"Checkpoint check passed: {len(class_names)} classes"
+                  + (f" (models with {extra} classes start with them; --classes keeps the others out)" if extra else "")
+                  + f", {schedules}, and each arm's hyperparameters")
 
     # 2. metrics, with every image's statistics
     run_dirs = {label: (out_dir / "runs" / f"eval_{prefix}_{label}").resolve() for label in models}
     results, per_image, validators = {}, {}, {}
     for label, path in models.items():
         with timer(f"validation/{label}"):
-            results[label], validators[label] = score_model(label, path, infos[label], args, run_dirs[label], imgsz)
+            results[label], validators[label] = score_model(label, path, infos[label], args, run_dirs[label],
+                                                            imgsizes[label])
         per_image[label] = validators[label].metrics.per_image
     image_order, flats = pair_images(per_image)
     first = validators[next(iter(models))]
@@ -1100,7 +1192,7 @@ def main(argv=None):
         latency_images = choose([full_path[name] for name in image_order], LATENCY_IMAGES, args.seed)
         for label in models:
             results[label]["speed"] = {**measure_latency(yolo[label], latency_images, args.device, run_dirs[label],
-                                                       imgsz),
+                                                       imgsizes[label], args.classes),
                                        "device": eval_device}
             print(f"[{label}] {results[label]['metrics']}  latency {results[label]['speed']['ms_per_img']} ms/img "
                   f"({results[label]['speed']['fps']} FPS) on {eval_device}")
@@ -1125,7 +1217,8 @@ def main(argv=None):
     with timer("sample_grid"):
         samples_grid = choose_samples(image_classes, class_names, args.seed)
         columns = [(arm_title(label, arms),
-                    {p: predict_boxes(yolo[label], p, args.device, imgsz) for _, p in samples_grid})
+                    {p: predict_boxes(yolo[label], p, args.device, imgsizes[label], args.classes)
+                     for _, p in samples_grid})
                    for label in models]
         plot_samples(samples_grid, columns, class_names, split_title, plots / f"{prefix}_samples.jpg")
 
@@ -1136,7 +1229,7 @@ def main(argv=None):
         "images": len(image_order),
         "boxes": int(flats[next(iter(models))]["target_cls"].size),
         "boxes_per_class": dict(zip(class_names, first.metrics.nt_per_class.astype(int).tolist())),
-        "settings": {"imgsz": imgsz, "batch": VAL_BATCH, "rect": True, "conf": float(first.args.conf), "iou": 0.7,
+        "settings": {"imgsz": imgsz_setting(imgsizes), "batch": VAL_BATCH, "rect": True, "conf": float(first.args.conf), "iou": 0.7,
                      "max_det": {label: r["max_det"] for label, r in results.items()},
                      "precision": {label: inference_precision(v.args) for label, v in validators.items()},
                      "confusion_matrix": "conf 0.25, IoU 0.45 (Ultralytics' validator default)",
@@ -1154,6 +1247,8 @@ def main(argv=None):
         "timings": timer.seconds,  # seconds per phase (writing the outputs comes after and is only printed)
         "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+    if args.classes is not None:  # without --classes the settings stay exactly as before
+        report["settings"]["classes"] = args.classes
     if tag:  # Gen 1 reports have neither key, so they stay exactly as before
         report["tag"] = tag
     if args.arms:
