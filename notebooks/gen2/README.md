@@ -38,6 +38,22 @@ start**, so the clone has the current `src/` and `configs/gen2/`.
 
 If Kaggle queues a notebook because too many sessions are running, run it after the others finish.
 
+## Run log
+
+What happened when the notebooks were run (dates in UTC, from the `finished_at` fields; numbers from `results/gen2/`).
+
+| Notebook | Outcome | Key output |
+|---|---|---|
+| `g2_0_build_dataset` | Done (Kaggle version 356132858), but without DWSD: the private upload was not ready, so the optional source was skipped | `build_report.json`: 6,292 train, 1,841 val, 1,514 test images (1,046 studio, 468 real_world), 7 classes |
+| `g2_1_arm_a` | Done in one run (2026-10-07) | `arm_a.json`: val mAP@50 0.4535, 1.56 h |
+| `g2_2_search_pso` | Done in one run (2026-10-07) | `best_pso.json`: proxy val mAP@50 0.32901 (`r1_p8`, round 1), 32 evaluations |
+| `g2_3_search_random` | Froze on 2026-10-08 after 11 of 32 evaluations and sat idle until the 12-hour limit. After the freeze fix (commits 745c9b5 and f8c6fa2), a new version resumed from the saved log and finished on 2026-10-09 | `best_random.json`: proxy val mAP@50 0.33401 (`s03`, evaluation 3), 32 evaluations |
+| `g2_4_arm_b` | Done in one run (2026-10-09) | `arm_b.json`: val mAP@50 0.4734, 2.07 h |
+| `g2_5_arm_c` | Froze on 2026-10-08 after 55 of 100 epochs. A new version salvaged the run folder, resumed from epoch 55 (`"resumed_from_epoch": 55`) and finished on 2026-10-09 | `arm_c.json`: val mAP@50 0.4662, 1.60 h of training in total |
+| `g2_6_evaluate` | Running (2026-10-10), with the separate DWSD-only build for india | Test results for all, studio, real_world and india: not in yet |
+
+The two freezes cost about 24 GPU hours; see "Freeze protection" below. The partial outputs of the frozen versions are kept in `results/gen2/salvage/`.
+
 ## What each notebook needs and produces
 
 | Notebook | Accelerator | Attach as input | Produces (in the Output tab) |

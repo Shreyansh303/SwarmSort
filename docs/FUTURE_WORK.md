@@ -14,6 +14,7 @@ Effort: **S** = hours, no GPU · **M** = a day, some GPU · **L** = several days
 | planned | agreed, not started |
 | in progress | being worked on |
 | skipped | dropped by a dated decision |
+| rejected | examined and not used, for the reason given |
 | done | finished (with commit or result) |
 
 ## 1. Quick wins (app and evaluation)
@@ -29,18 +30,18 @@ Effort: **S** = hours, no GPU · **M** = a day, some GPU · **L** = several days
 
 | # | Improvement | Problem it addresses | Effort | Status |
 |---|---|---|---|---|
-| 2.1 | **Add TACO** (Trash Annotations in Context: litter photographed in real environments, about 60 categories), mapped to our 6 classes and mixed into training | Training images are mostly isolated objects on clean backgrounds; TACO has real, cluttered scenes | L | in progress (Gen 2) |
-| 2.2 | **Add `Garbage_dataset_PlusYaml`** (Kaggle `engrbasit62`, about 12.7k images, 7 classes, already downloaded in the project folder), mapped to our classes | More variety per class; it also has an electronics class (see 2.5) | M | in progress (Gen 2) |
-| 2.3 | Survey other detection datasets (e.g. ZeroWaste for conveyor-belt sorting, UAVVaste for aerial litter) and check their licences before use | Different viewpoints and settings | M | in progress (Gen 2) |
+| 2.1 | **Add TACO** (Trash Annotations in Context: litter photographed in real environments, about 60 categories), mapped to our 6 classes and mixed into training | Training images are mostly isolated objects on clean backgrounds; TACO has real, cluttered scenes | L | done (Gen 2: TACO's 1,500 images mapped to 7 classes and used for train/val/test) |
+| 2.2 | **Add `Garbage_dataset_PlusYaml`** (Kaggle `engrbasit62`, about 12.7k images, 7 classes, already downloaded in the project folder), mapped to our classes | More variety per class; it also has an electronics class (see 2.5) | M | rejected (Gen 2 research: augmented duplicates; also train/test leakage and label errors, decision 2026-10-07) |
+| 2.3 | Survey other detection datasets (e.g. ZeroWaste for conveyor-belt sorting, UAVVaste for aerial litter) and check their licences before use | Different viewpoints and settings | M | done (Gen 2: HITL Recycling added for train/val/test, DWSD used as a test-only India set) |
 | 2.4 | **Augmentations for clutter**: copy-paste, smaller object scales, harder mosaic, blur and lighting changes | Small, overlapping, partly hidden items | M | idea |
-| 2.5 | **More classes**: transparent plastic vs glass, e-waste and hazardous items (red/black bins under SWM Rules 2016) | GLASS vs PLASTIC confusion; bins the app can't recommend today | L | idea |
+| 2.5 | **More classes**: transparent plastic vs glass, e-waste and hazardous items (red/black bins under SWM Rules 2016) | GLASS vs PLASTIC confusion; bins the app can't recommend today | L | idea (Gen 2 only added a catch-all OTHER class) |
 
 ## 3. Model
 
 | # | Improvement | Problem it addresses | Effort | Status |
 |---|---|---|---|---|
 | 3.1 | **Stronger model**: YOLOv8s/m or YOLO11n/s (supported by the same Ultralytics library), compared at equal training settings | YOLOv8n is the smallest model; a larger one should separate look-alike materials better (trade-off: slower on CPU) | M | idea |
-| 3.2 | **Larger input size** (640 instead of 416) for real photos | Phone photos are shrunk to 416 px, so small items become 10–20 pixel blobs | M | idea |
+| 3.2 | **Larger input size** (640 instead of 416) for real photos | Phone photos are shrunk to 416 px, so small items become 10–20 pixel blobs | M | done (Gen 2: data stored and trained at 640) |
 | 3.3 | **Sliced inference (SAHI)**: run the detector on overlapping tiles of a large photo and merge the results | Many small items in one wide photo | S–M | idea |
 | 3.4 | **Calibrate confidences** (e.g. temperature scaling) so 0.5 means roughly 50% correct | Scores are hard to interpret | M | idea |
 
@@ -67,5 +68,5 @@ Effort: **S** = hours, no GPU · **M** = a day, some GPU · **L** = several days
 
 1. **1.1 ensemble** and **1.3 confidence**: immediate demo improvement, no training.
 2. **1.4 real-world test set**: without it, no later change can be measured on real photos.
-3. **2.1 TACO** + **2.2 PlusYaml** + **3.1 stronger model**: the main fix for the domain gap (one Kaggle training run per variant).
+3. **2.1 TACO** + **2.2 PlusYaml** + **3.1 stronger model**: the main fix for the domain gap (one Kaggle training run per variant). Update for Gen 2: TACO (with HITL) and 640 px input are done, PlusYaml was rejected, and the stronger model is still open (a candidate for Gen 3).
 4. **4.x**: research extensions to the PSO study.

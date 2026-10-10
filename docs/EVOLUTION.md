@@ -9,7 +9,7 @@ The full write-up of the finished work is in the [README](../README.md). Ideas t
 | Gen | Dates | Data | Model | Method | Headline result | Status |
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-30 to 2026-10-05 | Kaggle garbage-detection: 10,464 images, 6 classes, mostly single objects on clean backgrounds | YOLOv8n, imgsz 416 | Three arms at equal budget: A defaults, B random search, C PSO | Test mAP@50 A 0.676, B 0.672, C 0.668: a statistical tie | Finished |
-| 2 | from 2026-10-07 | Part of the Gen 1 data plus real-world litter photos (TACO, HITL Recycling); DWSD (Kolkata streets) as a held-out India test set; 7 classes (OTHER added) | YOLOv8n, imgsz 640 | The same three arms, rerun on the merged data | None yet | In progress |
+| 2 | from 2026-10-07 | Part of the Gen 1 data plus real-world litter photos (TACO, HITL Recycling); DWSD (Kolkata streets) as a held-out India test set; 7 classes (OTHER added) | YOLOv8n, imgsz 640 | The same three arms, rerun on the merged data | All three arms trained. Val mAP@50 A 0.4535, B 0.4734, C 0.4662 (Gen 2 val set, not comparable with Gen 1). Test results pending | In progress: final evaluation running |
 
 ## How to update this document
 
@@ -171,21 +171,42 @@ The earlier plan listed `Garbage_dataset_PlusYaml` as a candidate. It was droppe
 | 2026-10-07 | Gen 1 is subsampled to about 3,000 train and 900 val images (stratified by class, seeded); all 1,046 Gen 1 test images stay test, and Gen 1 split assignments still come from `configs/split.csv`. |
 | 2026-10-07 | Domains: Gen 1 → `studio`; TACO and HITL → `real_world`; DWSD → `india`. Each has its own test list and yaml. |
 | 2026-10-07 | Licences recorded per source: TACO CC BY 4.0, HITL CC0, DWSD CC BY 4.0, Gen 1 CC BY 4.0. |
+| 2026-10-07 | The proxy-validity check is not repeated for Gen 2. Gen 1 showed that the proxy (12 epochs on a stratified 40% subset) ranks configurations like longer training (Spearman ρ = 0.976, n = 8), and the recipe is unchanged. |
 | 2026-10-08 | DWSD is read as semantic masks, not Labelme: the builder's new `semantic_mask` format turns each connected region of a class value into one box (8-connectivity; regions under 50 mask pixels are dropped and counted). Masks with no class pixels (81, plus 3 with only tiny regions) are left out, because some of them show unannotated waste. |
 | 2026-10-08 | DWSD's mask value → class mapping is **inferred** from the images. The official table (Ali et al., Data in Brief 2025, Table 3: 1 plastic container ... 14 nylon, "0 and 15 background") matches the masks' pixel counts exactly, but not their content: for example value 6 sits on plastic bottles (table: glass), 14 on foil (table: nylon), 12 on clothes (table: aluminium foil), and 15, which covers polythene bags in 610 of 784 masks, is not background. The names used are in `configs/gen2/sources.yaml`; values 1, 4, 7, 9, 11 and 13 are uncertain. |
+| 2026-10-08 | The main build (g2_0) is not redone to add DWSD. Because DWSD is test-only, `g2_6_evaluate` builds it as a separate, DWSD-only test set (`build_dataset.py --only dwsd`, same config, seed and max side) and scores it with tag `india`. |
+| 2026-10-08 | After two runs froze, every GPU notebook copies the dataset to local disk, runs each script under a stall watchdog with automatic restart, and resumes stopped work (`search.py` replays its log, `train_final.py --resume`). Training arguments stay unchanged, so the results stay comparable. The two frozen runs are continued from their saved outputs rather than restarted. |
 
-**To be decided** (the OTHER class and the image size were settled on 2026-10-07, see above):
+**To be decided** (the OTHER class, the image size and the proxy-validity check were settled on 2026-10-07, see above):
 
-- Whether to re-run the proxy-validity check on the merged data.
 - A stronger model (for example YOLOv8s) later, as Gen 3 ([FUTURE_WORK](FUTURE_WORK.md) item 3.1).
 
-### Results
+### Results so far
 
-No test results yet. Progress so far (val numbers only; the test split is used once, in `g2_6_evaluate`):
+**Test results are pending: `g2_6_evaluate` is running** (test sets: all, studio, real_world, and india from the separate DWSD-only build). Everything below is on the Gen 2 val split, which mixes studio and real-world images. These val numbers are **not comparable with Gen 1's val mAP@50 of 0.657**: the val set, the classes (7 instead of 6) and the image size all changed. The fair comparison, per domain and on the six shared classes, comes from `g2_6_evaluate`.
 
-- **Dataset** (`results/gen2/build_report.json`): 6,292 train, 1,841 val and 1,514 test images (1,046 studio, 468 real_world test images), 7 classes, built without DWSD (see Problems below).
-- **Arm A** (defaults, 100 epochs at imgsz 640, `results/gen2/arm_a.json`): val mAP@50 0.4535, mAP@50-95 0.3203.
-- **PSO search** (8 particles x 4 rounds = 32 proxy trainings of 12 epochs, `results/gen2/search_pso.json`): gbest val mAP@50 0.32901 (`r1_p8`), already found in round 1 and not improved after. The swarm still converged towards it: the round means rose from 0.267 to 0.286, 0.300 and 0.319. The winner is in `results/gen2/best_pso.json`.
+- **Dataset** (`results/gen2/build_report.json`): 6,292 train, 1,841 val and 1,514 test images (1,046 studio, 468 real_world test images), 7 classes, built without DWSD (see Problems below). The India test set (DWSD, 700 images in the local build) is built separately at evaluation time.
+
+**Search (proxy, val mAP@50; 32 proxy trainings of 12 epochs each, imgsz 640).** Sources: `results/gen2/search_pso.json`, `best_pso.json`, `search_random.json`, `best_random.json`.
+
+| | B: Random search | C: PSO |
+|---|---|---|
+| Best proxy val mAP@50 | 0.33401 (`s03`, evaluation 3) | 0.32901 (`r1_p8`, round 1) |
+| When the best was found | Evaluation 3 of 32; never improved after | Round 1 of 4; never improved after |
+| Spread of all 32 scores | mean 0.226, min 0.076 | round means 0.267, 0.286, 0.300, 0.319 |
+| Search time (Tesla T4, sum of the 32 proxies) | 2.30 h | 2.54 h |
+
+As in Gen 1, both searches found their best point early. The PSO swarm still converged: its mean score rose every round, so the particles moved towards the good region even though none beat the round-1 best. Random search scores lower on average (mean 0.226, against 0.293 over all 32 PSO evaluations), because it keeps sampling the whole space while the swarm gathers near good points. The random-search time leaves out the frozen session (see Problems).
+
+**Full training (val split, best.pt, 100 epochs at imgsz 640).** Sources: `results/gen2/arm_a.json`, `arm_b.json`, `arm_c.json`.
+
+| Arm | val mAP@50 | val mAP@50-95 | Training time (Tesla T4) |
+|---|---|---|---|
+| A: Defaults | 0.4535 | 0.3203 | 1.56 h |
+| B: Random search | 0.4734 | 0.3333 | 2.07 h |
+| C: PSO | 0.4662 | 0.3282 | 1.60 h (resumed from epoch 55; frozen time not counted) |
+
+Both tuned arms are ahead of the defaults on val (B +0.020, C +0.013 mAP@50), unlike Gen 1, where neither tuned arm beat the defaults on val (A 0.657, B 0.643, C 0.657). This is one training per arm on the val split, with no confidence interval, so it is not yet a result: the paired bootstrap on the test split in `g2_6_evaluate` will show whether the gap is real.
 
 ### Problems and fixes
 
@@ -195,7 +216,13 @@ No test results yet. Progress so far (val numbers only; the test split is used o
 | (2026-10-08) DWSD is not in Labelme format | The local download (`DSWD/`) has `Train/` and `Test/` folders of PNG photos with grey-level PNG masks (values 0-15), and no Labelme JSON, so the `labelme` reader would find nothing | The research assumed Labelme JSON because the dataset page says it was annotated in Labelme; only the exported masks are published | New `semantic_mask` reader in `src/build_dataset.py` (connected regions → boxes). Known limitation: touching objects of the same class form one region and become one box, so DWSD has fewer, larger boxes than a per-instance annotation (local build: 700 test images, 4,502 boxes: PLASTIC 3,040, PAPER 1,230, CARDBOARD 124, OTHER 90, METAL 18, no GLASS). `g2_6_evaluate` now also catches any India build or evaluation failure and goes on with the other domains |
 | (2026-10-08) Identical images inside HITL | `build_report.json` counts 918 identical-MD5 image pairs (plus 1,004 dHash and 26 thumbnail matches; 962 duplicate groups with 1,954 images, none across sources) | HITL contains the same photo under different file names, some with stock-photo names (for example `can-696583__340.jpg`). No group spans two sources and Gen 1 alone has 0 identical-MD5 pairs (`results/dataset_report.json`), so the pairs are within HITL (possibly a few within TACO: the report does not split the count by source) | No leakage: each group is kept in one split. But the copies count more than once in training, so they give those photos extra weight. Kept as they are for Gen 2 |
 | (2026-10-08) Two Kaggle runs froze | `g2_3_search_random` and `g2_5_arm_c` stopped printing about 55 minutes after training started (the search at 3,261 s, at the start of epoch 11 of its 12th proxy, after 11 evaluations; Arm C after 55 of 100 epochs, `last.pt` at epoch index 54) and sat idle without an error until Kaggle's 12-hour limit: about 24 GPU hours lost. Arm A and the PSO search, with the same code, had finished | Most likely the attached notebook-output mount under `/kaggle/input`, which the dataloader workers read the images from, stopped answering after about an hour (for example an expiring access token), so the trainer waited forever | Every GPU notebook now copies the dataset to local disk first (outside `/kaggle/working`; names and sizes checked; the copy itself fails loudly after 2 minutes without progress), runs every script under a stall watchdog (`src/watchdog_run.py`: 20 minutes without output or file changes -> kill the process group, restart, at most 3 times), and continues interrupted work: `search.py` replays its log, `train_final.py --resume` continues `last.pt` after checking that its training arguments match. Both stopped versions kept their outputs, so attaching them salvages the work (11 search evaluations, 55 Arm C epochs). Training arguments, including `workers`, are unchanged so the results stay comparable |
+| (2026-10-09) Watchdog self-test failed to start | The new setup cell's watchdog self-test (two unittest cases, run with `check=True`) stopped the first rerun of g2_3 (random search) 27 s in, before any training, so almost no GPU time was lost | The cell called `python -m unittest tests.test_watchdog...`, but `tests/` is not a Python package (no `__init__.py`), so unittest could not import it | Commit f8c6fa2: run the tests as `test_watchdog...` with `tests/` as the working directory, in all six GPU notebooks |
+| (2026-10-08) DWSD's published class names do not match the masks | Used as published, the table's names would have called plastic bottles glass, foil nylon, and the most common value (15, polythene bags) background | The table matches the masks' pixel counts but not what the masks cover | The value → class mapping was inferred by looking at the images (see the 2026-10-08 decisions); values 1, 4, 7, 9, 11 and 13 stay uncertain, so India-test results per class should be read with care |
 
 ### Status
 
-In progress. Dataset selection and the multi-source builder come first.
+In progress (2026-10-10).
+
+- Done: dataset survey and build, both searches, and full training of all three arms. The two runs that froze on 2026-10-08 were resumed after the fix: the random search continued from 11 of 32 evaluations, Arm C from epoch 55.
+- Running: `g2_6_evaluate`, the one-time test evaluation (all, studio, real_world and india).
+- Next: record the test results here, then update the demo app (plan step 7).
