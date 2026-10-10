@@ -28,7 +28,7 @@ Show SwarmSort a photo of waste and it draws a box around every item, names it (
 - [Repository structure](#repository-structure)
 - [Quick start](#quick-start)
 - [Reproducing the experiment](#reproducing-the-experiment)
-- [Generation 2 (in progress)](#generation-2-in-progress)
+- [Generation 2](#generation-2)
 - [Limitations and future work](#limitations-and-future-work)
 - [References and acknowledgements](#references-and-acknowledgements)
 
@@ -467,22 +467,26 @@ The test split is meant to be scored exactly once. For any trial run use `--spli
 The weights in `app/models/` (`arm_a.pt`, `arm_b.pt`, `arm_c.pt`) are byte copies of the three trained models in `results/runs/*/weights/best.pt`; [app/models/README.md](app/models/README.md) lists their sources and checksums. `tests/test_app.py` tests the bin rules, the image handling and a headless run of the app.
 </details>
 
-## Generation 2 (in progress)
+## Generation 2
 
 Everything above is Generation 1. Its models work on clean, studio-style photos but get confused by real street scenes, so Generation 2 changes the data rather than the tuning.
 
 - **Goal:** detect and sort waste in normal places (streets, parks, homes), and report studio and real-world accuracy separately.
 - **Data:** a merged dataset of 6,292 train, 1,841 val and 1,514 test images at 640 px, from three sources: a subsample of the Gen 1 dataset (studio), TACO and HITL Recycling (real-world litter). There are 7 classes: Gen 1's six plus OTHER. DWSD photos from Kolkata (700 images) form a separate, test-only India set.
 - **Method:** the same three arms as Gen 1 (A defaults, B random search, C PSO, 32 proxy trainings each), then 100 epochs of full training at imgsz 640 on Kaggle.
-- **Status (2026-10-10):** all three arms are trained. The one-time test evaluation (all, studio, real_world, india) is running.
+- **Status:** finished (test evaluation done 2026-10-10).
 
-| Arm | val mAP@50 | val mAP@50-95 |
-|---|---|---|
-| A: Defaults | 0.4535 | 0.3203 |
-| B: Random search | 0.4734 | 0.3333 |
-| C: PSO | 0.4662 | 0.3282 |
+Test mAP@50 [95% CI], test split used once:
 
-These val scores use the mixed Gen 2 val set, so they cannot be compared with Gen 1's numbers. The fair comparison comes from the test evaluation.
+| Arm | all (1,514 images) | studio (1,046) | real_world (468) | india (700) |
+|---|---|---|---|---|
+| A: Defaults | 0.479 [0.453, 0.513] | 0.571 [0.529, 0.619] | 0.310 [0.278, 0.440] | 0.027 [0.024, 0.031] |
+| B: Random search | 0.497 [0.471, 0.531] | 0.595 [0.557, 0.639] | 0.298 [0.271, 0.407] | 0.023 [0.021, 0.027] |
+| C: PSO | 0.500 [0.474, 0.534] | 0.590 [0.550, 0.635] | 0.310 [0.279, 0.415] | 0.027 [0.024, 0.031] |
+
+**Verdict.** Unlike Gen 1, tuning now helps: on the all and studio splits, both random search and PSO are significantly better than the defaults (about +0.02 mAP@50, paired bootstrap), but PSO and random search are again a statistical tie. On real-world photos no difference is significant, and on the Indian DWSD photos all three models fail (about 0.02–0.03), mainly because there was no Indian training data and DWSD's mask-derived boxes merge touching items.
+
+These numbers cannot be compared with Gen 1's 0.676: the studio images are the same, but Gen 2 uses 7 classes instead of 6, 640 px instead of 416 and only 3,000 of the 7,324 Gen 1 training images. Whether Gen 2 beats Gen 1 on real-world photos is not measured yet (next step: score the Gen 1 models on the Gen 2 real_world test set).
 
 Full history, problems and decisions: [docs/EVOLUTION.md](docs/EVOLUTION.md). How to run it on Kaggle: [notebooks/gen2/README.md](notebooks/gen2/README.md).
 

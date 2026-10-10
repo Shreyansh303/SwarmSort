@@ -6,6 +6,8 @@ A running list of improvements to SwarmSort, grouped by area and roughly ordered
 
 **Why this list exists.** The three models reach about 0.67 test mAP@50 on images that look like the training data (mostly one or a few items on clean backgrounds). On cluttered real-world photos, such as a street with scattered litter, they mislabel small items (crumpled polythene and cans shown as GLASS at 0.35–0.50 confidence), and the three models disagree with each other. Most items below target this domain gap.
 
+**Update after Gen 2 (2026-10-11).** Gen 2 added real-world training data (TACO, HITL) and trained at 640 px. Its test mAP@50 is about 0.48–0.50 on the mixed test set, about 0.30 on real-world photos and only about 0.02–0.03 on Indian street photos (DWSD), where all three models fail. The new OTHER class is very weak (AP@50 0.050–0.063). Whether Gen 2 is better than Gen 1 on real-world photos is not measured yet (item 1.5). Details: [EVOLUTION.md](EVOLUTION.md#generation-2-waste-in-real-places-finished).
+
 Effort: **S** = hours, no GPU · **M** = a day, some GPU · **L** = several days or a new data pipeline.
 
 | Status | Meaning |
@@ -25,6 +27,7 @@ Effort: **S** = hours, no GPU · **M** = a day, some GPU · **L** = several days
 | 1.2 | **Show model disagreement** as an "uncertain" flag on boxes only one model finds | Users can't tell confident detections from guesses | S | idea |
 | 1.3 | **Raise the default confidence** (e.g. 0.35 → 0.5) or use per-class thresholds | Many wrong boxes on real photos sit just above 0.35 | S | idea |
 | 1.4 | **Real-world test set**: 50–100 own phone photos, labelled (Label Studio or Roboflow), kept as a second, out-of-distribution test split | We only measure accuracy on dataset-style images; real-world accuracy is unknown | M | skipped (decision 2026-10-07; held-out real-world dataset images used instead) |
+| 1.5 | **Evaluate Gen 1 models on the Gen 2 real-world test set (6 shared classes)**: score the three Gen 1 models on the 468 real_world test images, ignoring OTHER | Gen 1's 0.676 and Gen 2's studio 0.571–0.595 are not comparable (6 vs 7 classes, 416 vs 640 px, only 3,000 of the 7,324 Gen 1 training images), so it is unknown whether Gen 2 improved real-world accuracy | S | planned (open item of Gen 2) |
 
 ## 2. Data
 
@@ -34,13 +37,15 @@ Effort: **S** = hours, no GPU · **M** = a day, some GPU · **L** = several days
 | 2.2 | **Add `Garbage_dataset_PlusYaml`** (Kaggle `engrbasit62`, about 12.7k images, 7 classes, already downloaded in the project folder), mapped to our classes | More variety per class; it also has an electronics class (see 2.5) | M | rejected (Gen 2 research: augmented duplicates; also train/test leakage and label errors, decision 2026-10-07) |
 | 2.3 | Survey other detection datasets (e.g. ZeroWaste for conveyor-belt sorting, UAVVaste for aerial litter) and check their licences before use | Different viewpoints and settings | M | done (Gen 2: HITL Recycling added for train/val/test, DWSD used as a test-only India set) |
 | 2.4 | **Augmentations for clutter**: copy-paste, smaller object scales, harder mosaic, blur and lighting changes | Small, overlapping, partly hidden items | M | idea |
-| 2.5 | **More classes**: transparent plastic vs glass, e-waste and hazardous items (red/black bins under SWM Rules 2016) | GLASS vs PLASTIC confusion; bins the app can't recommend today | L | idea (Gen 2 only added a catch-all OTHER class) |
+| 2.5 | **More classes**: transparent plastic vs glass, e-waste and hazardous items (red/black bins under SWM Rules 2016) | GLASS vs PLASTIC confusion; bins the app can't recommend today | L | idea (Gen 2 only added a catch-all OTHER class, which turned out very weak: see 2.7) |
+| 2.6 | **Indian-domain training data** (e.g. part of DWSD for training, keeping a held-out part for test, or other Indian sets) | Gen 2 had no Indian training images and scores only about 0.02–0.03 test mAP@50 on DWSD (Kolkata streets). DWSD's mask-derived boxes also merge touching items, so per-item boxes would be needed for a fair score | L | idea (main Gen 3 candidate) |
+| 2.7 | **Fix the weak OTHER class**: more OTHER examples, split it into clearer classes, or merge its items into existing classes | OTHER (cigarettes, mixed bags, textile, hazardous items) reaches only AP@50 0.050–0.063 on the Gen 2 test set for every arm | M | idea (Gen 3 candidate) |
 
 ## 3. Model
 
 | # | Improvement | Problem it addresses | Effort | Status |
 |---|---|---|---|---|
-| 3.1 | **Stronger model**: YOLOv8s/m or YOLO11n/s (supported by the same Ultralytics library), compared at equal training settings | YOLOv8n is the smallest model; a larger one should separate look-alike materials better (trade-off: slower on CPU) | M | idea |
+| 3.1 | **Stronger model**: YOLOv8s/m or YOLO11n/s (supported by the same Ultralytics library), compared at equal training settings | YOLOv8n is the smallest model; a larger one should separate look-alike materials better (trade-off: slower on CPU) | M | idea (Gen 3 candidate) |
 | 3.2 | **Larger input size** (640 instead of 416) for real photos | Phone photos are shrunk to 416 px, so small items become 10–20 pixel blobs | M | done (Gen 2: data stored and trained at 640) |
 | 3.3 | **Sliced inference (SAHI)**: run the detector on overlapping tiles of a large photo and merge the results | Many small items in one wide photo | S–M | idea |
 | 3.4 | **Calibrate confidences** (e.g. temperature scaling) so 0.5 means roughly 50% correct | Scores are hard to interpret | M | idea |
@@ -49,12 +54,12 @@ Effort: **S** = hours, no GPU · **M** = a day, some GPU · **L** = several days
 
 | # | Improvement | Problem it addresses | Effort | Status |
 |---|---|---|---|---|
-| 4.1 | **Several seeds per arm** (e.g. 3 full trainings each) | One training per arm can't separate the effect of tuning from training noise | M | idea |
+| 4.1 | **Several seeds per arm** (e.g. 3 full trainings each) | One training per arm can't separate the effect of tuning from training noise; PSO and random search tied in both Gen 1 and Gen 2 | M | idea |
 | 4.2 | **Multi-fidelity search**: successive halving or Hyperband (start many configs cheaply, promote the best to longer runs) | The 12-epoch proxy ranked configs well overall, but gaps between top configs vanished after 100 epochs | M | idea |
 | 4.3 | **PSO variants**: ring topology, constriction factor, adaptive inertia; more particles and rounds | Standard global-best PSO with 32 evaluations may converge early | M | idea |
 | 4.4 | **Compare with other optimisers** at the same budget: genetic algorithm, differential evolution, Bayesian optimisation (e.g. Optuna's TPE) | Shows where PSO stands among search methods | M | idea |
 | 4.5 | **Tune more dimensions**: colour augmentation (hsv_h/s/v), translate, loss gains (box, cls, dfl), image size | The 6 tuned settings left little room to beat the defaults | M | idea |
-| 4.6 | **Tune for the target domain**: use the real-world set (1.4) as the fitness validation set | The search optimised for dataset-style images, not real use | M | idea |
+| 4.6 | **Tune for the target domain**: use a real-world set as the fitness validation set (1.4 was skipped; Gen 2's real_world val images could serve) | The search optimised for dataset-style images, not real use | M | idea |
 
 ## 5. Deployment
 
@@ -70,3 +75,5 @@ Effort: **S** = hours, no GPU · **M** = a day, some GPU · **L** = several days
 2. **1.4 real-world test set**: without it, no later change can be measured on real photos.
 3. **2.1 TACO** + **2.2 PlusYaml** + **3.1 stronger model**: the main fix for the domain gap (one Kaggle training run per variant). Update for Gen 2: TACO (with HITL) and 640 px input are done, PlusYaml was rejected, and the stronger model is still open (a candidate for Gen 3).
 4. **4.x**: research extensions to the PSO study.
+
+Update after Gen 2 (2026-10-11): first **1.5** (Gen 1 models on the Gen 2 real-world test set, no training needed), then for Gen 3 **2.6 Indian-domain data**, **2.7 the OTHER class** and possibly **3.1 a larger model**.

@@ -50,7 +50,7 @@ What happened when the notebooks were run (dates in UTC, from the `finished_at` 
 | `g2_3_search_random` | Froze on 2026-10-08 after 11 of 32 evaluations and sat idle until the 12-hour limit. After the freeze fix (commits 745c9b5 and f8c6fa2), a new version resumed from the saved log and finished on 2026-10-09 | `best_random.json`: proxy val mAP@50 0.33401 (`s03`, evaluation 3), 32 evaluations |
 | `g2_4_arm_b` | Done in one run (2026-10-09) | `arm_b.json`: val mAP@50 0.4734, 2.07 h |
 | `g2_5_arm_c` | Froze on 2026-10-08 after 55 of 100 epochs. A new version salvaged the run folder, resumed from epoch 55 (`"resumed_from_epoch": 55`) and finished on 2026-10-09 | `arm_c.json`: val mAP@50 0.4662, 1.60 h of training in total |
-| `g2_6_evaluate` | Running (2026-10-10), with the separate DWSD-only build for india | Test results for all, studio, real_world and india: not in yet |
+| `g2_6_evaluate` | The first version ran 3.6 h without finishing and was cancelled (slow bootstrap). After the fix (commit c1a18c8), Kaggle version 357148735 finished on 2026-10-10 in about 7 minutes, including the separate DWSD-only build for india | `test_{all,studio,real_world,india}_results.json`, `test_domains.md`: test mAP@50 on all A 0.479, B 0.497, C 0.500; studio 0.571 / 0.595 / 0.590; real_world 0.310 / 0.298 / 0.310; india 0.027 / 0.023 / 0.027 |
 
 The two freezes cost about 24 GPU hours; see "Freeze protection" below. The partial outputs of the frozen versions are kept in `results/gen2/salvage/`.
 

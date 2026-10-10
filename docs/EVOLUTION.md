@@ -9,7 +9,7 @@ The full write-up of the finished work is in the [README](../README.md). Ideas t
 | Gen | Dates | Data | Model | Method | Headline result | Status |
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-30 to 2026-10-05 | Kaggle garbage-detection: 10,464 images, 6 classes, mostly single objects on clean backgrounds | YOLOv8n, imgsz 416 | Three arms at equal budget: A defaults, B random search, C PSO | Test mAP@50 A 0.676, B 0.672, C 0.668: a statistical tie | Finished |
-| 2 | from 2026-10-07 | Part of the Gen 1 data plus real-world litter photos (TACO, HITL Recycling); DWSD (Kolkata streets) as a held-out India test set; 7 classes (OTHER added) | YOLOv8n, imgsz 640 | The same three arms, rerun on the merged data | All three arms trained. Val mAP@50 A 0.4535, B 0.4734, C 0.4662 (Gen 2 val set, not comparable with Gen 1). Test results pending | In progress: final evaluation running |
+| 2 | 2026-10-07 to 2026-10-10 | Part of the Gen 1 data plus real-world litter photos (TACO, HITL Recycling); DWSD (Kolkata streets) as a held-out India test set; 7 classes (OTHER added) | YOLOv8n, imgsz 640 | The same three arms, rerun on the merged data | Test mAP@50 (all) A 0.479, B 0.497, C 0.500: both searches significantly beat the defaults, PSO and random search tie. Real-world about 0.30 (no significant differences); India about 0.02–0.03 (fails). Not comparable with Gen 1's 0.676 | Finished (evaluation done 2026-10-10); open items in its Status |
 
 ## How to update this document
 
@@ -109,9 +109,9 @@ The domain gap. The goal of SwarmSort is to help sort real waste, but the Gen 1 
 
 ---
 
-## Generation 2: waste in real places (in progress)
+## Generation 2: waste in real places (finished)
 
-**Started:** 2026-10-07.
+**Dates:** 2026-10-07 to 2026-10-10 (final test evaluation on 2026-10-10).
 
 ### Goal
 
@@ -181,9 +181,73 @@ The earlier plan listed `Garbage_dataset_PlusYaml` as a candidate. It was droppe
 
 - A stronger model (for example YOLOv8s) later, as Gen 3 ([FUTURE_WORK](FUTURE_WORK.md) item 3.1).
 
-### Results so far
+### Results
 
-**Test results are pending: `g2_6_evaluate` is running** (test sets: all, studio, real_world, and india from the separate DWSD-only build). Everything below is on the Gen 2 val split, which mixes studio and real-world images. These val numbers are **not comparable with Gen 1's val mAP@50 of 0.657**: the val set, the classes (7 instead of 6) and the image size all changed. The fair comparison, per domain and on the six shared classes, comes from `g2_6_evaluate`.
+**Final test evaluation** (used once: `g2_6_evaluate`, Kaggle version 357148735, 2026-10-10). Sources: `results/gen2/test_{all,studio,real_world,india}_results.json`, the matching `test_*_comparison.md` files and `results/gen2/test_domains.md`. Settings: imgsz 640, conf 0.001, 95% percentile CIs from 1,000 paired bootstrap resamples of the images (seed 0), Tesla T4.
+
+The four test sets:
+
+- **all:** 1,514 images, 8,192 boxes (studio + real_world together).
+- **studio:** 1,046 images, 7,413 boxes. The same images as Gen 1's test split (Gen 1 counted 7,415 boxes on them). No OTHER boxes.
+- **real_world:** 468 images, 779 boxes (TACO + HITL). Only **1** BIODEGRADABLE box.
+- **india:** 700 images, 4,502 boxes (DWSD, from the separate DWSD-only build; an MD5 cross-check against the 9,647 main-build images found 0 identical files). No BIODEGRADABLE or GLASS boxes.
+
+Test mAP@50 [95% CI]:
+
+| Arm | all | studio | real_world | india |
+|---|---|---|---|---|
+| A: Defaults | 0.479 [0.453, 0.513] | 0.571 [0.529, 0.619] | 0.310 [0.278, 0.440] | 0.027 [0.024, 0.031] |
+| B: Random search | 0.497 [0.471, 0.531] | 0.595 [0.557, 0.639] | 0.298 [0.271, 0.407] | 0.023 [0.021, 0.027] |
+| C: PSO | 0.500 [0.474, 0.534] | 0.590 [0.550, 0.635] | 0.310 [0.279, 0.415] | 0.027 [0.024, 0.031] |
+
+Test mAP@50-95 [95% CI]:
+
+| Arm | all | studio | real_world | india |
+|---|---|---|---|---|
+| A: Defaults | 0.329 [0.309, 0.358] | 0.386 [0.356, 0.425] | 0.254 [0.224, 0.371] | 0.015 [0.013, 0.018] |
+| B: Random search | 0.342 [0.322, 0.372] | 0.404 [0.374, 0.442] | 0.238 [0.213, 0.330] | 0.013 [0.012, 0.015] |
+| C: PSO | 0.343 [0.323, 0.374] | 0.398 [0.367, 0.439] | 0.248 [0.220, 0.336] | 0.015 [0.013, 0.017] |
+
+Pairwise differences in test mAP@50 [95% CI from the paired bootstrap]. A difference is significant only if its interval leaves out 0. In every case the mAP@50-95 verdict is the same as the mAP@50 one.
+
+| Pair | all | studio | real_world | india |
+|---|---|---|---|---|
+| B − A (random − defaults) | **+0.017** [+0.006, +0.030] | **+0.024** [+0.009, +0.038] | −0.012 [−0.118, +0.053] | **−0.003** [−0.006, −0.001] |
+| C − A (PSO − defaults) | **+0.020** [+0.011, +0.032] | **+0.019** [+0.005, +0.033] | +0.001 [−0.111, +0.065] | +0.000 [−0.003, +0.003] |
+| C − B (PSO − random) | +0.003 [−0.008, +0.015] | −0.005 [−0.018, +0.009] | +0.013 [−0.015, +0.036] | **+0.003** [+0.001, +0.006] |
+
+Bold = significant. In words:
+
+- **all and studio:** random search and PSO are both significantly better than the defaults, by about 0.02 mAP@50. PSO and random search cannot be told apart.
+- **real_world:** no difference is significant. The intervals are wide and lopsided (for A, 0.310 inside [0.278, 0.440]) because BIODEGRADABLE has a single box in this split: a resample that leaves out or repeats that one image swings that class's AP, and the class is one seventh of the mean. The arms' BIODEGRADABLE AP on that one box is 0.249 (A), 0.020 (B) and 0.003 (C).
+- **india:** the defaults are significantly better than random search, and PSO is significantly better than random search; PSO and the defaults tie. These gaps are a few thousandths on scores near zero, so they have no practical meaning: all three models fail on this set.
+
+Per-class AP@50 on the all split (best of the three in bold):
+
+| Class | A: Defaults | B: Random search | C: PSO |
+|---|---|---|---|
+| BIODEGRADABLE | 0.612 | **0.628** | 0.619 |
+| CARDBOARD | 0.540 | 0.568 | **0.572** |
+| GLASS | 0.605 | 0.631 | **0.638** |
+| METAL | 0.614 | 0.625 | **0.644** |
+| PAPER | 0.425 | 0.447 | **0.457** |
+| PLASTIC | 0.510 | **0.527** | 0.505 |
+| OTHER | 0.050 | 0.051 | **0.063** |
+
+PSO is best on five classes (CARDBOARD, GLASS, METAL, PAPER, OTHER) and random search on two (BIODEGRADABLE, PLASTIC); the defaults are never best. **OTHER is very weak** for every arm (AP@50 0.050–0.063). All 132 OTHER test boxes are in real_world, where the scores are about the same (0.051–0.062). On india, only PLASTIC (0.089–0.101) and PAPER (0.028–0.035) score above 0.01.
+
+Speed: 8.0–8.8 ms per image (batch 1, imgsz 640, Tesla T4) for every arm on every split.
+
+**Why India fails.** All three models score about 0.02–0.03 mAP@50 on DWSD (precision 0.070–0.075, recall 0.043–0.047). This is a domain-transfer failure plus a mismatch in labelling style, not a code bug:
+
+- No Indian images were in training. DWSD is test-only.
+- The DWSD images look augmented (rotated, with black corners and colour tints), unlike anything in the training data.
+- DWSD boxes come from semantic masks, so touching items of one class merge into one large box (see Problems below). A model that correctly finds each item separately still gets a low IoU against such a box, so even correct detections often count as misses.
+- DWSD's mask value → class mapping was inferred from the images, because the published names do not match the masks; six values stay uncertain.
+
+**Can Gen 2 be compared with Gen 1?** Not yet. Gen 1's test score (0.676 mAP@50) and Gen 2's studio score (0.571–0.595) use the same 1,046 images, but the models differ in three ways: 6 classes against 7, imgsz 416 against 640, and Gen 2 trained on only 3,000 of Gen 1's 7,324 train images (plus 3,292 real-world train images). So the lower Gen 2 studio score does not show that Gen 2 got worse. The question Gen 2 was started for, "do the Gen 2 models work better on real-world photos than the Gen 1 models?", is **not measured yet**: that needs the Gen 1 models scored on the Gen 2 real_world test set, on the six shared classes.
+
+**Earlier results on the Gen 2 val split** (recorded before the test evaluation). The val split mixes studio and real-world images. These val numbers are **not comparable with Gen 1's val mAP@50 of 0.657**: the val set, the classes (7 instead of 6) and the image size all changed.
 
 - **Dataset** (`results/gen2/build_report.json`): 6,292 train, 1,841 val and 1,514 test images (1,046 studio, 468 real_world test images), 7 classes, built without DWSD (see Problems below). The India test set (DWSD, 700 images in the local build) is built separately at evaluation time.
 
@@ -208,6 +272,8 @@ As in Gen 1, both searches found their best point early. The PSO swarm still con
 
 Both tuned arms are ahead of the defaults on val (B +0.020, C +0.013 mAP@50), unlike Gen 1, where neither tuned arm beat the defaults on val (A 0.657, B 0.643, C 0.657). This is one training per arm on the val split, with no confidence interval, so it is not yet a result: the paired bootstrap on the test split in `g2_6_evaluate` will show whether the gap is real.
 
+*Note (2026-10-11):* the test evaluation above confirmed the gap on the all and studio splits (both tuned arms significantly better than the defaults), but not on real_world. On val, random search was ahead of PSO (0.4734 against 0.4662); on test the two tie.
+
 ### Problems and fixes
 
 | Problem | Symptom | Cause | Fix |
@@ -219,11 +285,37 @@ Both tuned arms are ahead of the defaults on val (B +0.020, C +0.013 mAP@50), un
 | (2026-10-09) Watchdog self-test failed to start | The new setup cell's watchdog self-test (two unittest cases, run with `check=True`) stopped the first rerun of g2_3 (random search) 27 s in, before any training, so almost no GPU time was lost | The cell called `python -m unittest tests.test_watchdog...`, but `tests/` is not a Python package (no `__init__.py`), so unittest could not import it | Commit f8c6fa2: run the tests as `test_watchdog...` with `tests/` as the working directory, in all six GPU notebooks |
 | (2026-10-08) DWSD's published class names do not match the masks | Used as published, the table's names would have called plastic bottles glass, foil nylon, and the most common value (15, polythene bags) background | The table matches the masks' pixel counts but not what the masks cover | The value → class mapping was inferred by looking at the images (see the 2026-10-08 decisions); values 1, 4, 7, 9, 11 and 13 stay uncertain, so India-test results per class should be read with care |
 | (2026-10-10) Evaluation too slow | `g2_6_evaluate` (4 runs × 3 models, 1000 bootstrap resamples each) ran 3.6 hours without finishing; it was cancelled and all its output was lost | The bootstrap re-sorted every prediction (hundreds of thousands at conf 0.001) for every resample on the CPU, through Ultralytics' `ap_per_class` | Exact weighted bootstrap in `src/evaluate.py`: each image is weighted by its draw count and the predictions are sorted once; same numbers bit for bit (unit tests and a real 300-image val run give identical CIs and P(Δ>0)). 10× faster on that run, 29× on a Gen 2-sized set (1,500 images); the log now prints the time of each phase |
+| (2026-10-10) India test score near zero | All three arms score 0.023–0.027 mAP@50 on the 700 DWSD images, against 0.48–0.50 on the all split | No Indian training data; augmented-looking DWSD images; mask-derived boxes that merge touching items, so correct per-item detections get a low IoU; an inferred class mapping (see "Why India fails" above) | Not fixable within Gen 2: the test set was used once and must not be tuned on. Indian training data is a Gen 3 item |
+| (2026-10-10) Lopsided real_world intervals | real_world CIs such as 0.310 [0.278, 0.440] for Arm A, and B − A and C − A intervals about 0.17–0.18 wide | BIODEGRADABLE has a single box in the 468 real_world test images, so whether a resample includes that image swings one of the seven class APs | Reported as it is, with the reason. The real_world verdicts (no significant differences) stand, but the set is too small and unbalanced to show small gains |
+
+*Note (2026-10-11) on the "Evaluation too slow" row:* the row says "same numbers bit for bit". That holds when no confidence tie mixes a hit and a miss of one class. On the final Gen 2 runs some did: there the reference (`ap_per_class`) orders tied predictions arbitrarily (unstable sort), so the reference itself has no single exact answer. The built-in check, which rescores the first 2 resamples the slow way, showed a largest difference of 3.5e-4 in mAP (from the `g2_6_evaluate` log). That is negligible: the narrowest pairwise interval in these results (India, mAP@50-95) is about 0.0026 wide, more than seven times larger. The only verdict where a difference of that size is close to the boundary is India's PSO − random on mAP@50-95 (lower bound +0.0004), which concerns scores near zero anyway.
+
+### Lessons
+
+- **Tuning helps when there is room to improve.** In Gen 1, on clean data, the defaults were already near the best and tuning gave nothing. On the harder, mixed Gen 2 data, both searches beat the defaults by about 0.02 mAP@50, and the paired bootstrap says this is real on the all and studio splits.
+- **PSO still did not beat random search.** This is the second generation in which the two tie at an equal budget of 32 proxy trainings. PSO was best on five of seven classes on the all split, but the overall difference (+0.003) is well inside the noise. With one training per arm, the project cannot separate them.
+- **Report each domain separately.** The all split is dominated by studio boxes (7,413 of 8,192), so it mostly repeats the studio result. The real_world split tells a different story (no significant gains).
+- **Check how many boxes each class has in each test set before reading per-class scores or intervals.** One BIODEGRADABLE box made the real_world intervals lopsided.
+- **Data first, again.** A domain with no training data fails almost completely (India about 0.02–0.03 mAP@50), whatever the tuning.
+- **A test set must be labelled like the training data.** DWSD's merged, mask-derived boxes punish correct per-item detections, so its score measures the labelling difference as well as the model.
+- **A narrow catch-all class does not learn well.** OTHER (cigarettes, mixed bags, textile, hazardous items) stays at AP@50 0.050–0.063.
+- **Engineering:** long cloud runs need freeze protection (local data copy, watchdog, resume), and the evaluation code needs a speed test on a full-sized set before the one-time test run.
+
+### What triggers Generation 3
+
+Gen 2 showed that tuning gives a small, real gain on mixed data, but it left the main goal (better accuracy on real Indian waste photos) open:
+
+1. **India fails.** The models have never seen Indian scenes. Gen 3 needs Indian-domain training data: for example part of DWSD for training (keeping a held-out part for test, ideally with per-item boxes), or other Indian datasets.
+2. **The Gen 1 vs Gen 2 real-world comparison is missing.** Score the three Gen 1 models on the Gen 2 real_world test set, on the six shared classes. Until then, it is not known whether Gen 2 improved real-world accuracy over Gen 1. This needs no training and should come first.
+3. **The OTHER class is very weak** (AP@50 0.050–0.063). Options: more OTHER data, splitting it into clearer classes, or merging its items into existing classes.
+4. **Maybe a larger model** (for example YOLOv8s), and several seeds per arm so PSO and random search can be told apart ([FUTURE_WORK](FUTURE_WORK.md) items 3.1 and 4.1).
 
 ### Status
 
-In progress (2026-10-10).
+Finished (evaluation done 2026-10-10).
 
-- Done: dataset survey and build, both searches, and full training of all three arms. The two runs that froze on 2026-10-08 were resumed after the fix: the random search continued from 11 of 32 evaluations, Arm C from epoch 55.
-- Running: `g2_6_evaluate`, the one-time test evaluation (all, studio, real_world and india).
-- Next: record the test results here, then update the demo app (plan step 7).
+- Done: dataset survey and build, both searches, full training of all three arms, and the one-time test evaluation on all, studio, real_world and india (`g2_6_evaluate`, Kaggle version 357148735, about 7 minutes). The two runs that froze on 2026-10-08 were resumed after the fix: the random search continued from 11 of 32 evaluations, Arm C from epoch 55.
+- Open items:
+  - update the demo app with the Gen 2 models (plan step 7);
+  - score the Gen 1 models on the Gen 2 real_world test set (six shared classes);
+  - Indian-domain training data and the weak OTHER class, which move to Gen 3.
