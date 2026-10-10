@@ -16,6 +16,8 @@ Steps:
   3. Speed: median batch-1 latency over 100 images of the split (10 warm-up predictions first).
   4. Paired bootstrap: resample the images with replacement (the same images for every model) to get 95% CIs
      of mAP@50 and mAP@50-95 and of every pairwise difference. A difference whose CI contains 0 is not significant.
+     Each resample is scored as image weights (draw counts) on predictions sorted once: the same numbers as
+     Ultralytics' ap_per_class on the resampled images, many times faster.
   5. Outputs: <out-dir>/<split>_results.json, <out-dir>/<split>_comparison.md and <out-dir>/plots/.
      With a tag they become <split>_<tag>_results.json etc. The tag is --tag, or else the domain of a per-domain
      test yaml (--data .../data_test_real_world.yaml -> tag real_world).
@@ -29,6 +31,7 @@ import math
 import platform
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
@@ -56,6 +59,7 @@ SAMPLE_CONF = 0.25  # confidence threshold for drawn boxes and for the latency r
 LATENCY_IMAGES, LATENCY_WARMUP = 100, 10
 REL_TOL = 1e-6     # tolerance of the hyperparameter comparison
 CONSISTENCY_TOL = 1e-4
+BOOTSTRAP_CHECK = 2  # resamples also scored the direct, slow way (ap_per_class), so the log shows they agree
 
 # The arms table. Paths are relative to the repo (absolute paths also work). config / val_json / epochs_csv may be
 # null; epochs / imgsz may be null to read them from val_json; notebook / download only improve the missing-file
@@ -441,20 +445,233 @@ def consistency_check(flat, map50, map50_95, tol=CONSISTENCY_TOL):
             "map50_95_recomputed": m, "max_abs_diff": diff, "tolerance": tol, "passed": bool(diff <= tol)}
 
 
-def bootstrap_maps(flats, n_resamples, seed, progress=False):
-    """Paired bootstrap: each resample draws image indices with replacement, the SAME ones for every model.
+AP_EPS = 1e-16  # ap_per_class's default eps (recall = TP / (labels + eps))
+AP_X = np.linspace(0, 1, 101)  # compute_ap's 101 recall points (COCO interpolation)
+N_IOU = 10  # IoU thresholds 0.50:0.95
+try:  # the compiled function that np.interp calls for real numbers (np.interp only adds a dtype check)
+    from numpy._core.multiarray import interp as _interp  # numpy 2
+except ImportError:  # pragma: no cover
+    def _interp(x, xp, fp, left, right):
+        return np.interp(x, xp, fp, left, right)
 
-    Returns {label: array (n_resamples, 2)} of (mAP@50, mAP@50-95).
+
+class WeightedMap:
+    """(mAP@50, mAP@50-95) of a resample given as image weights, without re-sorting any prediction.
+
+    Drawing images with replacement is the same as weighting each image by its draw count w_i. The predictions are
+    sorted by confidence once, with ap_per_class's own sort (np.argsort(-conf)); a resample then only needs weighted
+    TP/FP counts along that fixed order. Calling it with w = np.bincount(idx) gives exactly map_from_stats(flat, idx):
+
+    - classes: those with labels in the resample (sum of w_i x labels_i,c > 0), as ap_per_class's np.unique; a class
+      with labels but no prediction keeps a row of zeros, as in ap_per_class.
+    - AP: the same arithmetic as Ultralytics' compute_ap (precision envelope, np.interp at 101 recall points,
+      trapezoid), on the same recall and precision values. compute_ap's result only depends on the first and the last
+      point of each run of equal recall: inside a run only misses are added, so the precision falls and those points
+      change neither the envelope nor np.interp (which interpolates from the last point of a run to the first point of
+      the next). So the curve kept here has, per true-positive copy, its point and the point just before the next hit,
+      plus the last miss before the first hit. The counts are whole numbers and the divisions are the same, so every
+      AP, and so every mAP, is bit-for-bit equal.
+
+    Ties: predictions of one class with equal confidence and identical TP flags can come in any order (the curve is
+    the same). If such a tie mixes a hit and a miss, ap_per_class's result depends on the order its unstable sort
+    happens to give; mixed_ties counts those ties (0 means the result is exact in every resample).
     """
+
+    def __init__(self, flat):
+        tp, conf, pred_cls, target_cls = flat["tp"], flat["conf"], flat["pred_cls"], flat["target_cls"]
+        self.n_images = len(flat["pred_start"]) - 1
+        pred_img = np.repeat(np.arange(self.n_images), np.diff(flat["pred_start"]))
+        target_img = np.repeat(np.arange(self.n_images), np.diff(flat["target_start"]))
+        order = np.argsort(-conf)  # the same sort as ap_per_class, done once
+        self.classes = np.unique(target_cls)
+        k = len(self.classes)
+        self.n_labels = np.zeros((self.n_images, k), dtype=np.int64)  # labels per image and class
+        self.n_preds = np.zeros((self.n_images, k), dtype=np.int64)  # predictions per image and class
+        np.add.at(self.n_labels, (target_img, np.searchsorted(self.classes, target_cls)), 1)
+        ranked_img, hit_pos, hit_base, hit_img, hit_tp, hit_class = [], [], [], [], [], []
+        self.mixed_ties = 0
+        for ci, c in enumerate(self.classes):
+            pos = order[pred_cls[order] == c]  # this class's predictions, highest confidence first
+            np.add.at(self.n_preds[:, ci], pred_img[pos], 1)
+            hit = np.flatnonzero(tp[pos].any(1))  # predictions that are a TP at some IoU threshold
+            last = hit[-1] + 1 if len(hit) else 0  # the weights after the last hit are only needed as a total
+            offset = sum(len(r) for r in ranked_img)
+            ranked_img.append(pred_img[pos[:last]])
+            hit_pos.append(offset + hit)
+            hit_base.append(np.full(len(hit), offset))
+            hit_img.append(pred_img[pos[hit]])
+            hit_tp.append(tp[pos[hit]].reshape(-1, N_IOU))
+            hit_class.append(np.full(len(hit), ci))
+            self.mixed_ties += mixed_tie_count(conf[pos], tp[pos])
+        self.hit_img = np.concatenate(hit_img or [np.zeros(0, dtype=int)])  # every class's hits, class after class
+        self.hit_tp_t = np.ascontiguousarray(np.concatenate(hit_tp or [np.zeros((0, N_IOU), dtype=bool)]).T)
+        self.hit_class = np.concatenate(hit_class or [np.zeros(0, dtype=int)])
+        # each class's predictions down to its last hit, class after class; each hit's place there and its class's start
+        self.ranked_img = np.concatenate(ranked_img or [np.zeros(0, dtype=int)])
+        self.hit_pos = np.concatenate(hit_pos or [np.zeros(0, dtype=int)])
+        self.hit_base = np.concatenate(hit_base or [np.zeros(0, dtype=int)])
+
+    def __call__(self, w):
+        """(mAP@50, mAP@50-95) with image i counted w[i] times (w: whole numbers, one per image)."""
+        w = np.asarray(w, dtype=np.int64)
+        n_labels, n_preds = w @ self.n_labels, w @ self.n_preds
+        present = n_labels > 0
+        if not present.any():
+            return 0.0, 0.0
+        active = present & (n_preds > 0)  # classes with labels but no prediction keep AP 0
+        ap = np.zeros((len(self.classes), N_IOU))
+        if active.any():
+            w_ranked = w[self.ranked_img]
+            above = np.cumsum(w_ranked) - w_ranked
+            before = above[self.hit_pos] - above[self.hit_base]  # weighted predictions of its class ranked above a hit
+            w_hit = w[self.hit_img]
+            keep_t = self.hit_tp_t & ((w_hit > 0) & active[self.hit_class])  # (10, hits): a counted TP at j
+            ap.T.flat[:] = curves_ap(w_hit, before, keep_t, self.hit_class, n_preds, n_labels, active)
+        ap = ap[present]  # one row per class with labels, in class order, as ap_per_class
+        return float(ap[:, 0].mean()), float(ap.mean())  # as Ultralytics' Metric.map50 and Metric.map
+
+
+def curve_points(w_hit, before, keep_t, hit_class, n_preds, active):
+    """Cumulative (TP, FP) counts of the PR-curve points that compute_ap's result depends on, for every curve.
+
+    Curve s = j * n_classes + c (IoU threshold j, class c). w_hit, before: weight of each hit and the weighted
+    predictions ranked above it; keep_t: (10, hits) whether it is a TP at threshold j (and counted); hit_class: its
+    class; n_preds: weighted predictions per class; active: the classes whose AP is computed.
+
+    A streak of hits with no miss between them raises the precision at every step, so the precision envelope is the
+    same all along the streak and np.interp returns exactly that value anywhere inside it. Each streak therefore needs
+    only 3 points: its first hit, its last hit, and the last miss before the next streak (a repeated point changes
+    nothing). Each curve with misses before its first hit also starts with that last miss (0 TP).
+    Returns tpc, fpc (all curves, one after the other), and each curve's start and length.
+    """
+    k = len(n_preds)
+    n_seg = N_IOU * k
+    flat = np.flatnonzero(keep_t)  # (threshold, hit) pairs: curve after curve, confidence order inside a curve
+    jj = flat // keep_t.shape[1]
+    hh = flat - jj * keep_t.shape[1]
+    seg = jj * k + hit_class[hh]
+    tw, ranked_above = w_hit[hh], before[hh]
+    n = len(seg)
+    first = np.ones(n, dtype=bool)
+    first[1:] = seg[1:] != seg[:-1]
+    last = np.ones(n, dtype=bool)
+    last[:-1] = first[1:]
+    cs = np.cumsum(tw)
+    t_end = cs - (cs - tw)[np.maximum.accumulate(np.where(first, np.arange(n), 0))]  # hits up to this one
+    f_before = ranked_above - (t_end - tw)  # misses ranked above this hit
+    seg_npred = np.tile(n_preds, N_IOU)
+    f_next = np.empty(n, dtype=np.int64)  # misses before the next hit of the curve (or in all, after the last hit)
+    f_next[:-1] = f_before[1:]
+    f_next[last] = seg_npred[seg[last]] - t_end[last]
+    lead = np.where(np.tile(active, N_IOU), seg_npred, 0)  # misses before the first hit (all, if no hit)
+    lead[seg[first]] = f_before[first]
+    has_lead = lead > 0
+    a = np.flatnonzero(first | np.concatenate(([True], f_before[1:] != f_before[:-1])))  # first hit of each streak
+    b = np.flatnonzero(last | (f_next != f_before))  # last hit of each streak
+    streak_seg = seg[a]
+    seg_len = 3 * np.bincount(streak_seg, minlength=n_seg) + has_lead
+    seg_start = np.cumsum(seg_len) - seg_len
+    tpc, fpc = np.zeros(seg_len.sum(), dtype=np.int64), np.zeros(seg_len.sum(), dtype=np.int64)
+    fpc[seg_start[has_lead]] = lead[has_lead]  # the lead point (0 TP, all misses so far) opens its curve
+    pos = np.arange(3 * len(a)) + np.repeat(np.cumsum(has_lead)[streak_seg], 3)
+    tpc[pos] = np.stack([t_end[a] - tw[a] + 1, t_end[b], t_end[b]], axis=1).ravel()
+    fpc[pos] = np.stack([f_before[a], f_before[a], f_next[b]], axis=1).ravel()
+    return tpc, fpc, seg_start, seg_len
+
+
+def curves_ap(w_hit, before, keep_t, hit_class, n_preds, n_labels, active):
+    """AP of every curve s = j * n_classes + c (0 for inactive classes), with compute_ap's exact arithmetic."""
+    tpc, fpc, seg_start, seg_len = curve_points(w_hit, before, keep_t, hit_class, n_preds, active)
+    n_seg = len(seg_len)
+    act = np.flatnonzero(seg_len)
+    denom = np.tile(n_labels + AP_EPS, N_IOU)
+    recall = tpc / np.repeat(denom, seg_len)  # as ap_per_class: tpc / (n_l + eps)
+    precision = tpc / (tpc + fpc)
+    # compute_ap's curves, one after the other: mrec = [0, recall, recall[-1], 1], mpre = [1, precision, 0, 0]
+    lens = seg_len[act]
+    ext_start = np.cumsum(lens + 3) - (lens + 3)
+    mrec, mpre = np.zeros(len(tpc) + 3 * len(act)), np.zeros(len(tpc) + 3 * len(act))
+    pos = np.arange(len(tpc)) + np.repeat(np.arange(1, 3 * len(act) + 1, 3), lens)
+    mrec[pos], mpre[pos] = recall, precision
+    mpre[ext_start] = 1.0
+    mrec[ext_start + lens + 1] = recall[seg_start[act] + lens - 1]
+    mrec[ext_start + lens + 2] = 1.0
+    ys = np.empty((len(act), len(AP_X)))
+    for r, (a, b) in enumerate(zip(ext_start.tolist(), (ext_start + lens + 3).tolist())):
+        envelope = np.maximum.accumulate(mpre[a:b][::-1])[::-1]  # max from the right, as compute_ap
+        ys[r] = _interp(AP_X, mrec[a:b], envelope, None, None)
+    terms = np.diff(AP_X) * (ys[:, 1:] + ys[:, :-1]) / 2.0  # np.trapezoid's terms, then its sum, curve by curve
+    out = np.zeros(n_seg)
+    out[act] = [t.sum(-1) for t in terms]
+    return out
+
+
+def mixed_tie_count(conf, tp):
+    """Number of groups of equal confidence (one class) that mix predictions with different TP flags."""
+    if len(conf) < 2:
+        return 0
+    flags = tp.astype(np.int64) @ (1 << np.arange(tp.shape[1]))
+    o = np.lexsort((flags, -conf))
+    c, f = conf[o], flags[o]
+    tied = c[1:] == c[:-1]
+    mixed = tied & (f[1:] != f[:-1])
+    group = np.cumsum(np.concatenate(([True], ~tied)))[1:]  # group id of the second element of each pair
+    return len(np.unique(group[mixed]))
+
+
+def image_count(flats):
     sizes = {len(f["pred_start"]) - 1 for f in flats.values()}
     if len(sizes) != 1:
         raise ValueError(f"models were scored on different numbers of images: {sizes}")
-    n_images = sizes.pop()
+    return sizes.pop()
+
+
+def resample_indices(n_images, n_resamples, seed):
+    """The image indices of each resample, drawn with replacement (one generator, one draw per resample)."""
     rng = np.random.default_rng(seed)
+    for _ in range(n_resamples):
+        yield rng.integers(0, n_images, size=n_images)
+
+
+def bootstrap_maps(flats, n_resamples, seed, progress=False, check=0):
+    """Paired bootstrap: each resample draws image indices with replacement, the SAME ones for every model.
+
+    Each resample is scored by WeightedMap (image weights = draw counts), which gives exactly the numbers of
+    _bootstrap_reference (ap_per_class on the concatenated resample) without re-sorting the predictions.
+    check: also score the first `check` resamples with the reference and print the largest difference.
+    Returns {label: array (n_resamples, 2)} of (mAP@50, mAP@50-95).
+    """
+    n_images = image_count(flats)
+    scorers = {label: WeightedMap(flat) for label, flat in flats.items()}
+    if progress:
+        for label, s in scorers.items():
+            if s.mixed_ties:
+                print(f"  Note: model {label} has {s.mixed_ties} confidence tie(s) mixing a hit and a miss of one "
+                      f"class; ap_per_class orders those arbitrarily (unstable sort), so a resample containing one "
+                      f"can differ slightly from it (see the exactness check below)")
+    out = {label: np.empty((n_resamples, 2)) for label in flats}
+    diffs = []
+    start = time.time()
+    for b, idx in enumerate(resample_indices(n_images, n_resamples, seed)):
+        w = np.bincount(idx, minlength=n_images)
+        for label, scorer in scorers.items():
+            out[label][b] = scorer(w)
+            if b < check:
+                diffs.append(np.abs(out[label][b] - map_from_stats(flats[label], idx)).max())
+        if progress and ((b + 1) % 100 == 0 or b + 1 == n_resamples):
+            print(f"  bootstrap {b + 1}/{n_resamples} ({time.time() - start:.0f} s)", flush=True)
+    if progress and diffs:
+        print(f"  exactness check: the first {min(check, n_resamples)} resample(s) rescored with ap_per_class, "
+              f"max |diff| {max(diffs):.1e}", flush=True)
+    return out
+
+
+def _bootstrap_reference(flats, n_resamples, seed, progress=False):
+    """The direct paired bootstrap: ap_per_class on each concatenated resample (slow; kept to test the fast one)."""
+    n_images = image_count(flats)
     out = {label: np.empty((n_resamples, 2)) for label in flats}
     start = time.time()
-    for b in range(n_resamples):
-        idx = rng.integers(0, n_images, size=n_images)
+    for b, idx in enumerate(resample_indices(n_images, n_resamples, seed)):
         for label, flat in flats.items():
             out[label][b] = map_from_stats(flat, idx)
         if progress and ((b + 1) % 100 == 0 or b + 1 == n_resamples):
@@ -779,6 +996,26 @@ def load_val_metrics(labels, arms=GEN1_ARMS):
 # ---------------------------------------------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------------------------------------------
+class PhaseTimer:
+    """Wall-clock seconds of each phase of a run, printed as each phase ends (so a Kaggle log shows where the time
+    goes). Use as `with timer("bootstrap"):`; a name with a '/' ("validation/A") is grouped under its first part."""
+
+    def __init__(self):
+        self.seconds = {}
+
+    @contextmanager
+    def __call__(self, name):
+        t0 = time.perf_counter()
+        yield
+        took = time.perf_counter() - t0
+        group, _, sub = name.partition("/")
+        if sub:
+            self.seconds.setdefault(group, {})[sub] = round(took, 1)
+        else:
+            self.seconds[name] = round(took, 1)
+        print(f"[time] {name.replace('/', ' ')}: {took:.1f} s", flush=True)
+
+
 def score_model(label, path, info, args, run_dir, imgsz=IMGSZ):
     """Validate one model, check its recorded per-image stats against Ultralytics' mAP, and summarize it."""
     max_det = int(info["train_args"].get("max_det", 300))
@@ -817,6 +1054,7 @@ def main(argv=None):
 
     args = parse_args(argv)
     start = time.time()
+    timer = PhaseTimer()
     split, models, arms, tag = args.split, args.models, args.arms_table, args.tag
     prefix = output_prefix(split, tag)  # 'test' in Gen 1; e.g. 'test_real_world' with a tag
     split_title = f"{split} ({tag})" if tag else split
@@ -830,22 +1068,25 @@ def main(argv=None):
               f"results/ for the final test run.")
 
     # 1. checkpoint files and configs, before any long work
-    require_model_files(models, arms)
-    infos = {label: load_checkpoint_info(path) for label, path in models.items()}
-    imgsz = eval_imgsz(models, arms)
-    if args.skip_checks:
-        print("Checkpoint config check skipped (--skip-checks)")
-    else:
-        run_checks(models, infos, class_names, arms)
-        schedules = ", ".join(f"{label}: {epochs} epochs at imgsz {size}"
-                              for label, (epochs, size) in ((lb, expected_schedule(lb, arms)) for lb in models))
-        print(f"Checkpoint check passed: {len(class_names)} classes, {schedules}, and each arm's hyperparameters")
+    with timer("checks"):
+        require_model_files(models, arms)
+        infos = {label: load_checkpoint_info(path) for label, path in models.items()}
+        imgsz = eval_imgsz(models, arms)
+        if args.skip_checks:
+            print("Checkpoint config check skipped (--skip-checks)")
+        else:
+            run_checks(models, infos, class_names, arms)
+            schedules = ", ".join(f"{label}: {epochs} epochs at imgsz {size}"
+                                  for label, (epochs, size) in ((lb, expected_schedule(lb, arms)) for lb in models))
+            print(f"Checkpoint check passed: {len(class_names)} classes, {schedules}, and each arm's "
+                  f"hyperparameters")
 
     # 2. metrics, with every image's statistics
     run_dirs = {label: (out_dir / "runs" / f"eval_{prefix}_{label}").resolve() for label in models}
     results, per_image, validators = {}, {}, {}
     for label, path in models.items():
-        results[label], validators[label] = score_model(label, path, infos[label], args, run_dirs[label], imgsz)
+        with timer(f"validation/{label}"):
+            results[label], validators[label] = score_model(label, path, infos[label], args, run_dirs[label], imgsz)
         per_image[label] = validators[label].metrics.per_image
     image_order, flats = pair_images(per_image)
     first = validators[next(iter(models))]
@@ -854,18 +1095,20 @@ def main(argv=None):
     image_classes = {full_path[s["image"]]: set(s["target_cls"].astype(int).tolist()) for s in first.metrics.per_image}
 
     # 3. real-time speed, on the same images for every model
-    yolo = {label: YOLO(str(path)) for label, path in models.items()}
-    latency_images = choose([full_path[name] for name in image_order], LATENCY_IMAGES, args.seed)
-    for label in models:
-        results[label]["speed"] = {**measure_latency(yolo[label], latency_images, args.device, run_dirs[label],
-                                                   imgsz),
-                                   "device": eval_device}
-        print(f"[{label}] {results[label]['metrics']}  latency {results[label]['speed']['ms_per_img']} ms/img "
-              f"({results[label]['speed']['fps']} FPS) on {eval_device}")
+    with timer("latency"):
+        yolo = {label: YOLO(str(path)) for label, path in models.items()}
+        latency_images = choose([full_path[name] for name in image_order], LATENCY_IMAGES, args.seed)
+        for label in models:
+            results[label]["speed"] = {**measure_latency(yolo[label], latency_images, args.device, run_dirs[label],
+                                                       imgsz),
+                                       "device": eval_device}
+            print(f"[{label}] {results[label]['metrics']}  latency {results[label]['speed']['ms_per_img']} ms/img "
+                  f"({results[label]['speed']['fps']} FPS) on {eval_device}")
 
     # 4. paired bootstrap
     print(f"\nPaired bootstrap: {args.bootstrap} resamples of {len(image_order)} images, seed {args.seed}")
-    samples = bootstrap_maps(flats, args.bootstrap, args.seed, progress=True)
+    with timer("bootstrap"):
+        samples = bootstrap_maps(flats, args.bootstrap, args.seed, progress=True, check=BOOTSTRAP_CHECK)
     for label, s in samples.items():
         results[label]["bootstrap"] = {"map50_ci95": percentile_ci(s[:, 0]), "map50_95_ci95": percentile_ci(s[:, 1]),
                                        "map50_mean": float(s[:, 0].mean()), "map50_95_mean": float(s[:, 1].mean())}
@@ -873,15 +1116,18 @@ def main(argv=None):
         if len(models) >= 2 else []
 
     # 5. figures
-    plot_confusion(results, split_title, plots / f"{prefix}_confusion.png", arms)
-    plot_per_class(results, split_title, plots / f"{prefix}_per_class.png", arms)
-    samples_grid = choose_samples(image_classes, class_names, args.seed)
-    columns = [(arm_title(label, arms), {p: predict_boxes(yolo[label], p, args.device, imgsz) for _, p in samples_grid})
-               for label in models]
-    plot_samples(samples_grid, columns, class_names, split_title, plots / f"{prefix}_samples.jpg")
-    curves_name = "training_curves.png" if prefix == "test" else f"{prefix}_training_curves.png"  # trials keep apart
-    plot_training_curves({label: REPO / arm["epochs_csv"] for label, arm in arms.items() if arm.get("epochs_csv")},
-                         plots / curves_name, arms)
+    with timer("figures"):
+        plot_confusion(results, split_title, plots / f"{prefix}_confusion.png", arms)
+        plot_per_class(results, split_title, plots / f"{prefix}_per_class.png", arms)
+        curves_name = "training_curves.png" if prefix == "test" else f"{prefix}_training_curves.png"  # trials apart
+        plot_training_curves({label: REPO / arm["epochs_csv"] for label, arm in arms.items()
+                              if arm.get("epochs_csv")}, plots / curves_name, arms)
+    with timer("sample_grid"):
+        samples_grid = choose_samples(image_classes, class_names, args.seed)
+        columns = [(arm_title(label, arms),
+                    {p: predict_boxes(yolo[label], p, args.device, imgsz) for _, p in samples_grid})
+                   for label in models]
+        plot_samples(samples_grid, columns, class_names, split_title, plots / f"{prefix}_samples.jpg")
 
     # 6. JSON and markdown
     report = {
@@ -905,6 +1151,7 @@ def main(argv=None):
         "device": eval_device,
         "processor": platform.processor(),
         "seconds": round(time.time() - start, 1),
+        "timings": timer.seconds,  # seconds per phase (writing the outputs comes after and is only printed)
         "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     if tag:  # Gen 1 reports have neither key, so they stay exactly as before
@@ -913,8 +1160,9 @@ def main(argv=None):
         report["arms"] = rel(args.arms)
     markdown = comparison_markdown(report, arms)
     out_json, out_md = out_dir / f"{prefix}_results.json", out_dir / f"{prefix}_comparison.md"
-    write_json(out_json, report)
-    out_md.write_text(markdown, encoding="utf-8")
+    with timer("outputs"):
+        write_json(out_json, report)
+        out_md.write_text(markdown, encoding="utf-8")
     print("\n" + markdown)
     print(f"Wrote {rel(out_json)}, {rel(out_md)} and {rel(plots)}/ in {(time.time() - start) / 60:.1f} min")
     return report

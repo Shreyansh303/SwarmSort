@@ -179,6 +179,133 @@ class TestBootstrap(unittest.TestCase):
             evaluate.bootstrap_maps(flats, 5, seed=0)
 
 
+def awkward_stats(n_images=60, seed=0, mixed=False):
+    """Per-image stats with every awkward case of the weighted bootstrap (7 classes, as in Gen 2):
+
+    - confidence ties: half the predictions take one of 8 confidence levels. Inside one class a level always has the
+      same TP flags (mixed=False), so the order of tied predictions does not matter; across classes the flags differ.
+      With mixed=True a tied level of one class mixes hits and misses.
+    - images 10k: labels but no prediction; 10k+1: predictions but no label; 10k+2: neither.
+    - class 5 is labelled in one image only (absent from about a third of the resamples), class 6 is predicted but
+      never labelled, class 3 is labelled but never predicted (AP 0 row).
+    - images 50-54 are exact copies of images 20-24 (more duplicated stats, on top of the resampling).
+    """
+    rng = np.random.default_rng(seed)
+    levels = np.array([0.9, 0.7, 0.55, 0.4, 0.25, 0.1, 0.05, 0.01])
+    flags = rng.random((7, len(levels), 1)) < np.linspace(0.9, 0.2, 10)  # TP flags per (class, level)
+    per_image = []
+    for i in range(n_images):
+        kind = i % 10
+        n_targets = 0 if kind in (1, 2) else int(rng.integers(1, 7))
+        n_preds = 0 if kind in (0, 2) else int(rng.integers(1, 15))
+        target_cls = rng.choice([0, 1, 2, 3, 4], n_targets).astype(float)
+        if i == 7:
+            target_cls = np.append(target_cls, 5.0)
+        pred_cls = rng.choice([0, 1, 2, 4, 5, 6], n_preds)
+        level = rng.integers(0, len(levels), n_preds)
+        tied = rng.random(n_preds) < 0.5
+        conf = np.where(tied, levels[level], rng.random(n_preds))
+        tp = np.where(tied[:, None], flags[pred_cls, level], rng.random((n_preds, 1)) < np.linspace(0.8, 0.1, 10))
+        if mixed and n_preds:
+            pred_cls[0], conf[0], tp[0] = 0, levels[2], ~flags[0, 2]  # same class and confidence, other flags
+        per_image.append({"image": f"im{i}.jpg", "tp": tp, "conf": conf, "pred_cls": pred_cls.astype(float),
+                          "target_cls": target_cls})
+    for i in range(50, min(55, n_images)):
+        per_image[i] = {**per_image[i - 30], "image": f"im{i}.jpg"}
+    return per_image
+
+
+class TestWeightedBootstrap(unittest.TestCase):
+    """The fast bootstrap (image weights, predictions sorted once) vs the direct one (ap_per_class per resample)."""
+
+    def setUp(self):
+        self.flats = {label: evaluate.stack_stats(awkward_stats(seed=s)) for label, s in (("A", 0), ("B", 1), ("C", 2))}
+
+    def test_the_test_data_has_every_awkward_case(self):
+        per_image = awkward_stats()
+        flat = evaluate.stack_stats(per_image)
+        self.assertTrue(any(len(s["conf"]) == 0 and len(s["target_cls"]) for s in per_image))
+        self.assertTrue(any(len(s["target_cls"]) == 0 and len(s["conf"]) for s in per_image))
+        self.assertTrue(any(len(s["target_cls"]) == 0 and len(s["conf"]) == 0 for s in per_image))
+        self.assertEqual(np.sum(flat["target_cls"] == 5), 1)
+        self.assertGreater(np.sum(flat["pred_cls"] == 6), 0)
+        self.assertEqual(np.sum(flat["pred_cls"] == 3), 0)
+        for c in (0, 1, 2):  # many confidence ties inside a class, all with the same TP flags
+            conf = flat["conf"][flat["pred_cls"] == c]
+            self.assertGreater(len(conf) - len(np.unique(conf)), 10)
+        self.assertEqual(evaluate.WeightedMap(flat).mixed_ties, 0)
+        self.assertGreater(evaluate.WeightedMap(evaluate.stack_stats(awkward_stats(mixed=True))).mixed_ties, 0)
+
+    def test_every_resample_is_bit_for_bit_equal(self):
+        fast = evaluate.bootstrap_maps(self.flats, 300, seed=11)
+        slow = evaluate._bootstrap_reference(self.flats, 300, seed=11)
+        for label in self.flats:
+            np.testing.assert_array_equal(fast[label], slow[label])  # exact, not approximately
+        self.assertGreater(len(np.unique(fast["A"][:, 0])), 100)  # the resamples really differ
+
+    def test_cis_and_pairwise_outputs_are_identical(self):
+        fast = evaluate.bootstrap_maps(self.flats, 200, seed=3)
+        slow = evaluate._bootstrap_reference(self.flats, 200, seed=3)
+        observed = {label: dict(zip(("map50", "map50_95"), evaluate.map_from_stats(f)))
+                    for label, f in self.flats.items()}
+        for label in self.flats:
+            for k in (0, 1):
+                self.assertEqual(evaluate.percentile_ci(fast[label][:, k]), evaluate.percentile_ci(slow[label][:, k]))
+        self.assertEqual(evaluate.pairwise_differences(fast, observed), evaluate.pairwise_differences(slow, observed))
+
+    def test_weights_match_explicit_resamples(self):
+        flat = self.flats["A"]
+        scorer = evaluate.WeightedMap(flat)
+        n = scorer.n_images
+        self.assertEqual(scorer(np.ones(n, dtype=int)), evaluate.map_from_stats(flat))
+        for idx in ([7] * n, [7, 7, 0, 3], [1, 2, 1, 2, 11, 21, 50, 20, 20], [0, 10, 20, 30]):  # 7: the only class 5
+            self.assertEqual(scorer(np.bincount(idx, minlength=n)), evaluate.map_from_stats(flat, np.array(idx)))
+        self.assertEqual(scorer(np.bincount([1, 2, 11], minlength=n)), (0.0, 0.0))  # no label at all
+
+    def test_gen1_style_stats(self):
+        flats = {"A": evaluate.stack_stats(fake_stats(seed=3)), "B": evaluate.stack_stats(fake_stats(seed=4))}
+        fast, slow = evaluate.bootstrap_maps(flats, 100, seed=0), evaluate._bootstrap_reference(flats, 100, seed=0)
+        for label in flats:
+            np.testing.assert_array_equal(fast[label], slow[label])
+
+    def test_check_prints_the_largest_difference(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            evaluate.bootstrap_maps(self.flats, 3, seed=0, progress=True, check=2)
+        self.assertIn("first 2 resample(s) rescored with ap_per_class, max |diff| 0.0e+00", out.getvalue())
+
+    def test_mixed_ties_stay_close_and_are_reported(self):
+        """A tie that mixes a hit and a miss has no defined order (ap_per_class's sort is unstable): the two
+        methods may then differ, but only slightly, and the run log says so."""
+        flats = {"A": evaluate.stack_stats(awkward_stats(mixed=True))}
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            fast = evaluate.bootstrap_maps(flats, 100, seed=0, progress=True)
+        slow = evaluate._bootstrap_reference(flats, 100, seed=0)
+        self.assertLess(np.abs(fast["A"] - slow["A"]).max(), 0.02)
+        self.assertIn("confidence tie(s) mixing a hit and a miss", out.getvalue())
+
+    def test_mixed_tie_count(self):
+        conf = np.array([0.9, 0.5, 0.5, 0.5, 0.3, 0.3, 0.1])
+        tp = np.zeros((7, 10), dtype=bool)
+        self.assertEqual(evaluate.mixed_tie_count(conf, tp), 0)
+        tp[2, 0] = True  # the 0.5 group now mixes flags; the 0.3 group still agrees
+        self.assertEqual(evaluate.mixed_tie_count(conf, tp), 1)
+        tp[5] = True
+        self.assertEqual(evaluate.mixed_tie_count(conf, tp), 2)
+
+
+class TestPhaseTimer(unittest.TestCase):
+    def test_phases_are_recorded_and_printed(self):
+        timer = evaluate.PhaseTimer()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            with timer("bootstrap"):
+                pass
+            with timer("validation/A"):
+                pass
+        self.assertEqual(set(timer.seconds), {"bootstrap", "validation"})
+        self.assertEqual(list(timer.seconds["validation"]), ["A"])
+        self.assertIn("[time] validation A: 0.0 s", out.getvalue())
+
+
 class TestModelsArgument(unittest.TestCase):
     def parse_error(self, argv):
         with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
