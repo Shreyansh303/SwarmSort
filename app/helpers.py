@@ -1,7 +1,8 @@
-"""Pure helpers of the SwarmSort demo app: bin rules, image handling, inference, drawing and result tables.
+"""Pure helpers of the SwarmSort demo app: generations, bin rules, image handling, inference, drawing, tables.
 
 Nothing here imports Streamlit, so the unit tests can import this file directly. app/app.py builds the page.
 """
+import hashlib
 import io
 import json
 import os
@@ -19,17 +20,30 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 APP_DIR = Path(__file__).resolve().parent
 REPO = APP_DIR.parent
 MODELS_DIR = APP_DIR / "models"
-RESULTS_JSON = REPO / "results" / "test_results.json"
+RESULTS_JSON = REPO / "results" / "test_results.json"  # Generation 1
+GEN2_RESULTS_DIR = REPO / "results" / "gen2"
 TEST_LIST = REPO / "configs" / "lists" / "test.txt"  # written per machine by src/verify_dataset.py
 DATASET_DIR = REPO / "GARBAGE CLASSIFICATION"
 
-IMGSZ = 416      # training image size; Ultralytics letterboxes every photo to this size
-MAX_SIDE = 1280  # larger photos are shrunk first (the model sees 416 px anyway), so drawing and display stay fast
+IMGSZ = 416      # Generation 1 training image size; Ultralytics letterboxes every photo to the model's size
+MAX_SIDE = 1280  # larger photos are shrunk first (the model sees 416 or 640 px anyway), so drawing stays fast
 
-# The 6 classes in the model's index order
-CLASS_NAMES = ["BIODEGRADABLE", "CARDBOARD", "GLASS", "METAL", "PAPER", "PLASTIC"]
-# Box colour per class. Only BIODEGRADABLE (green bin) is green; the dry classes use colours that are neither
-# green nor blue, so a box colour is never mistaken for a bin colour.
+# Generation 1: studio photos, 6 classes, imgsz 416. Generation 2: studio + real-world photos, 7 classes (adds
+# OTHER), imgsz 640. Each generation has its own three arms, weights folder and test results. The imgsz here is
+# only a fallback: the app reads the real one from each checkpoint's train_args.
+GENERATIONS = {
+    "gen2": {"label": "Generation 2 (real-world data, 7 classes)", "short": "Generation 2",
+             "dir": MODELS_DIR / "gen2", "imgsz": 640, "results": GEN2_RESULTS_DIR / "test_all_results.json"},
+    "gen1": {"label": "Generation 1 (studio data, 6 classes)", "short": "Generation 1",
+             "dir": MODELS_DIR, "imgsz": IMGSZ, "results": RESULTS_JSON},
+}
+DEFAULT_GENERATION = "gen2"
+DOMAINS = ["all", "studio", "real_world", "india"]  # Generation 2 test sets: results/gen2/test_<domain>_results.json
+
+# All classes in the models' index order: the 6 Generation 1 classes, then Generation 2's OTHER
+CLASS_NAMES = ["BIODEGRADABLE", "CARDBOARD", "GLASS", "METAL", "PAPER", "PLASTIC", "OTHER"]
+# Box colour per class. Only BIODEGRADABLE (green bin) is green; the dry classes and OTHER use colours that are
+# neither green nor blue, so a box colour is never mistaken for a bin colour.
 CLASS_COLORS = {
     "BIODEGRADABLE": "#237a33",  # green
     "CARDBOARD": "#8b5a2b",      # brown
@@ -37,18 +51,23 @@ CLASS_COLORS = {
     "METAL": "#707070",          # grey
     "PAPER": "#e6c200",          # yellow (dark label text)
     "PLASTIC": "#cc3a24",        # red-orange
+    "OTHER": "#262626",          # near-black, like the reject bin
 }
-OTHER_COLOR = "#000000"
+OTHER_COLOR = "#000000"  # a class name this app does not know
 
-# The three trained models (byte copies of results/runs/*/weights/best.pt)
+# The three trained arms of each generation (byte copies of the trained best.pt; see app/models/README.md)
 MODELS = {
     "A": {"name": "Defaults", "file": "arm_a.pt"},
     "B": {"name": "Random search", "file": "arm_b.pt"},
     "C": {"name": "PSO", "file": "arm_c.pt"},
 }
 
-# Bin rules after India's Solid Waste Management Rules 2016: green = wet / biodegradable, blue = dry / recyclable
-BINS = {"green": "Green bin (wet / compost)", "blue": "Blue bin (dry recyclables)"}
+# Bin rules after India's Solid Waste Management Rules 2016, which ask households to keep biodegradable,
+# non-biodegradable and domestic hazardous waste apart: green = wet / biodegradable, blue = dry / recyclable, and a
+# reject bin (black in this app) for OTHER: dry waste that cannot be recycled, plus domestic hazardous bits that
+# need their own drop-off. Cities handle the reject stream differently, so the label says to check local rules.
+BINS = {"green": "Green bin (wet / compost)", "blue": "Blue bin (dry recyclables)",
+        "reject": "Reject bin (non-recyclable / check local rules)"}
 BIN_RULES = {
     "BIODEGRADABLE": {"bin": "green", "tip": "Compost"},
     "PAPER": {"bin": "blue", "tip": "Paper recycling; keep it dry and clean"},
@@ -56,6 +75,8 @@ BIN_RULES = {
     "PLASTIC": {"bin": "blue", "tip": "Plastic recycling; rinse containers"},
     "METAL": {"bin": "blue", "tip": "Metal recycling; rinse cans"},
     "GLASS": {"bin": "blue", "tip": "Glass recycling; handle with care, keep separate if broken"},
+    "OTHER": {"bin": "reject", "tip": "Not recyclable (cigarette butts, dirty mixed litter, textiles); take "
+                                      "batteries, medicines or sharps to a domestic hazardous waste drop-off"},
 }
 
 
@@ -120,11 +141,91 @@ def comparison_rows(results):
     return rows
 
 
+def pairwise_note(results):
+    """Plain summary of the test mAP@50 pairwise verdicts, e.g. 'B and C significantly beat A; C vs B is a tie.'
+
+    Uses each pair's paired-bootstrap verdict ('significant'); the sign of observed_diff (b minus a) picks the
+    winner. None if the results have no pairwise comparisons.
+    """
+    try:
+        pairs = [(p["a"], p["b"], p["map50"]) for p in results["pairwise"]]
+    except (TypeError, KeyError):
+        return None
+    if not pairs:
+        return None
+    beaten, ties = {}, []
+    for a, b, m in pairs:
+        if m.get("significant"):
+            winner, loser = (b, a) if m.get("observed_diff", 0) > 0 else (a, b)
+            beaten.setdefault(loser, []).append(winner)
+        else:
+            ties.append(f"{b} vs {a}")
+    if not beaten:
+        return "The three arms are statistically tied (every paired bootstrap 95% CI of their differences contains 0)."
+    parts = []
+    for loser, winners in beaten.items():
+        winners = sorted(winners)
+        names = winners[0] if len(winners) == 1 else ", ".join(winners[:-1]) + " and " + winners[-1]
+        parts.append(f"{names} significantly beat{'s' if len(winners) == 1 else ''} {loser}")
+    parts += [f"{t} is a tie" for t in ties]
+    return "; ".join(parts) + "."
+
+
+def load_domain_results(results_dir=GEN2_RESULTS_DIR):
+    """{domain: Generation 2 test results, or None if missing} for every domain in DOMAINS."""
+    return {d: load_results(Path(results_dir) / f"test_{d}_results.json") for d in DOMAINS}
+
+
+def domain_rows(domain_results):
+    """One row per arm: test mAP@50 [95% CI] on each domain that has results ('n/a' where an arm is missing)."""
+    present = {d: r for d, r in (domain_results or {}).items() if r}
+    if not present:
+        return []
+    rows = []
+    for label in MODELS:
+        row = {"Model": f"{label}: {MODELS[label]['name']}"}
+        for domain, results in present.items():
+            images = results.get("images")
+            column = f"{domain} ({images} images)" if images else domain
+            try:
+                m = results["models"][label]
+                ci = m["bootstrap"]["map50_ci95"]
+                row[column] = f"{m['metrics']['map50']:.3f} [{ci[0]:.3f}, {ci[1]:.3f}]"
+            except (TypeError, KeyError, IndexError):
+                row[column] = "n/a"
+        rows.append(row)
+    return rows
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Inputs
 # ---------------------------------------------------------------------------------------------------------------
-def model_path(label):
-    return MODELS_DIR / MODELS[label]["file"]
+def model_path(generation, label):
+    return GENERATIONS[generation]["dir"] / MODELS[label]["file"]
+
+
+def missing_weights_message(generation, label):
+    """What the page says when a model file is not on disk."""
+    path = model_path(generation, label)
+    try:
+        shown = path.relative_to(REPO).as_posix()
+    except ValueError:
+        shown = str(path)
+    text = (f"Model file not found: {shown}. It is a copy of the trained {GENERATIONS[generation]['short']} "
+            "model (see app/models/README.md for its source).")
+    others = [GENERATIONS[g]["short"] for g in GENERATIONS if g != generation]
+    if others:
+        text += f" Meanwhile, pick {others[0]} in the sidebar."
+    return text
+
+
+def sha256_12(path):
+    """First 12 hex digits of a file's sha256, as recorded in the results files and app/models/README.md."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:12]
 
 
 def test_images(test_list=TEST_LIST, dataset_dir=DATASET_DIR):
@@ -167,23 +268,46 @@ def prepare_image(source, max_side=MAX_SIDE):
 # ---------------------------------------------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------------------------------------------
-def load_model(path):
-    """Load a YOLO checkpoint and run one warm-up prediction, so the first real photo is not slowed down."""
+def model_imgsz(model, fallback=IMGSZ):
+    """The image size the model was trained at: the checkpoint's train_args['imgsz'], else the fallback."""
+    ckpt = getattr(model, "ckpt", None)
+    train_args = ckpt.get("train_args") if isinstance(ckpt, dict) else None
+    size = train_args.get("imgsz") if isinstance(train_args, dict) else None
+    if isinstance(size, (list, tuple)):
+        size = max(size) if size else None
+    try:
+        size = int(size)
+    except (TypeError, ValueError):
+        return fallback
+    return size if size > 0 else fallback
+
+
+def model_class_names(model):
+    """The model's class names in index order, or [] if it has none."""
+    names = getattr(model, "names", None)
+    if isinstance(names, dict):
+        return [names[k] for k in sorted(names)]
+    return list(names) if isinstance(names, (list, tuple)) else []
+
+
+def load_model(path, fallback_imgsz=IMGSZ):
+    """Load a YOLO checkpoint and run one warm-up prediction at its training size, so the first photo is quick."""
     from ultralytics import YOLO
 
     model = YOLO(str(path))
-    model.predict(np.zeros((IMGSZ, IMGSZ, 3), dtype=np.uint8), imgsz=IMGSZ, verbose=False)
+    size = model_imgsz(model, fallback_imgsz)
+    model.predict(np.zeros((size, size, 3), dtype=np.uint8), imgsz=size, verbose=False)
     return model
 
 
-def detect(model, image, conf=0.35, iou=0.7):
+def detect(model, image, conf=0.35, iou=0.7, imgsz=IMGSZ):
     """Run the model on one RGB PIL image -> (detections sorted by confidence, inference time in ms).
 
     Each detection is {"class": name, "conf": float, "box": (x1, y1, x2, y2) in image pixels}.
     The time covers Ultralytics' preprocessing, the network and NMS.
     """
     start = time.perf_counter()
-    result = model.predict(image, imgsz=IMGSZ, conf=conf, iou=iou, verbose=False)[0]
+    result = model.predict(image, imgsz=imgsz, conf=conf, iou=iou, verbose=False)[0]
     ms = (time.perf_counter() - start) * 1000
     boxes = result.boxes
     detections = [{"class": result.names[int(c)], "conf": float(p), "box": tuple(xyxy)}

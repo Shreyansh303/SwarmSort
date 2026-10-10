@@ -21,6 +21,7 @@ runs/
 results/runs*/
 *.pt
 !app/models/*.pt
+!app/models/gen2/*.pt
 *.onnx
 
 # Python
