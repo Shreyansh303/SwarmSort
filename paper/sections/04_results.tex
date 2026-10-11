@@ -1,12 +1,12 @@
 \section{Results}
 \label{sec:results}
 
-We first report whether the proxy fitness can be trusted (RQ2), then how the searches behaved and how the three arms compare on the held-out test sets (RQ1), and finally how the scores change from studio to real-world and Indian photographs (RQ3). Interpretation is left to Section~\ref{sec:discussion}.
+We report the validity of the proxy (RQ2), the behavior of the searches and the test comparison of the three arms (RQ1), and the change from studio to real-world and Indian photographs (RQ3); interpretation follows in Section~\ref{sec:discussion}.
 
 \subsection{Proxy Validity}
 \label{subsec:res-proxy}
 
-The proxy passed the check that was fixed before the \genone searches (Section~\ref{subsec:proxy}). Across the eight configurations, the Spearman rank correlation between the proxy scores and the 40-epoch medium scores is $\rho = 0.976$ ($n = 8$), well above the pass threshold of 0.6 (Table~\ref{tab:proxy}, Fig.~\ref{fig:proxy}). The two rankings differ by a single swap of adjacent ranks: lhs3 and lhs5 are third and fourth on the proxy (0.29495 and 0.30186) but fourth and third after 40 epochs (0.56712 and 0.55195). The same four settings (lhs4, the defaults, lhs6 and lhs7) lead both rankings, and the defaults score second-highest on both, behind lhs4 only. Among these four, however, the medium scores lie within 0.026 of each other (0.61246 to 0.63839), so the proxy separates poor settings from good ones far more clearly than it separates the good ones from each other.
+The proxy passed the check fixed before the \genone searches (Section~\ref{subsec:proxy}): the Spearman rank correlation between the proxy and the 40-epoch medium scores is $\rho = 0.976$ ($n = 8$), well above the pass threshold of 0.6 (Table~\ref{tab:proxy}, Fig.~\ref{fig:proxy}). The two rankings differ only by a swap of the adjacent lhs3 and lhs5. The same four settings lead both rankings, with the defaults second behind lhs4 on both, but their medium scores lie within 0.026 of each other, so the proxy separates poor settings from good ones far more clearly than good ones from each other.
 
 \begin{table}[!t]
 \centering
@@ -40,12 +40,12 @@ lhs4 & 0.49547 & 8 & 0.63839 & 8 \\
 \label{fig:proxy}
 \end{figure}
 
-A second, indirect check comes from settings that both generations evaluated. The searches used the same seeds and the same search space in both generations. Random search therefore drew the same 32 configurations in \genone and \gentwo. PSO's positions depend on the fitness only through the personal and global bests; these coincided long enough for the swarm to visit identical positions in rounds 1--3 (24 evaluations), whereas all eight round-4 positions differ. On these repeated configurations, the proxy scores of the two generations are strongly rank-correlated: Spearman 0.991 for the 32 random-search configurations and 0.892 for the 24 PSO configurations, recomputed from the four search logs. These coefficients compare proxy with proxy across generations, not proxy with longer training. They show that the two generations order settings alike on the proxy, but they do not replace a proxy-validity check for \gentwo.
+A second, indirect check uses configurations that both generations evaluated. With the same seeds and search space, random search drew the same 32 configurations in both generations. PSO's positions depend on the fitness only through the personal and global bests, which coincided long enough for the swarm to visit identical positions in rounds 1--3 (24 evaluations) but not in round~4. On these repeated configurations, the proxy scores of the two generations have Spearman correlations of 0.991 (random search) and 0.892 (PSO), recomputed from the four search logs. This compares proxy with proxy, not proxy with longer training: the generations order settings alike, but this does not replace a proxy-validity check for \gentwo.
 
 \subsection{Search Behavior}
 \label{subsec:res-search}
 
-Fig.~\ref{fig:convergence} shows every proxy evaluation and the best score found so far. In \genone, random search found its best setting, 0.4995 \mapfifty on the proxy, at its second evaluation and did not improve during the remaining 30. PSO improved in steps: its best was 0.4894 after round~1, 0.4942 after round~3 and 0.4953 in round~4 (evaluation 27). The swarm converged as intended: the round means rose from 0.393 to 0.423, 0.450 and 0.482, and the standard deviation within a round fell from 0.122 to 0.088, 0.047 and 0.011. On the same proxy, the defaults scored 0.4765, and most evaluations fell below that score: 28 of the 32 random-search evaluations and 21 of the 32 PSO evaluations. The two winners differ by only 0.0042, and one of the Latin hypercube settings of the proxy check, lhs4, had scored 0.4955, between them. All four search winners of the two generations use a smaller initial learning rate than the default of 0.01 (0.0025 to 0.0070).
+Fig.~\ref{fig:convergence} shows every proxy evaluation and the best score so far. In \genone, random search found its best setting (0.4995 proxy \mapfifty) at its second evaluation and never improved on it. PSO improved in steps, from 0.4894 after round~1 to 0.4942 after round~3 and 0.4953 in round~4 (evaluation 27), and the swarm converged as intended: the round means rose from 0.393 to 0.423, 0.450 and 0.482, and the within-round standard deviation fell from 0.122 to 0.088, 0.047 and 0.011. The defaults scored 0.4765 on the same proxy, above 28 of the 32 random-search and 21 of the 32 PSO evaluations. The two winners differ by only 0.0042, and lhs4 of the proxy check (0.4955) lies between them. All four search winners of the two generations use a smaller initial learning rate than the default of 0.01 (0.0025 to 0.0070).
 
 \begin{figure*}[!t]
 \centering
@@ -54,12 +54,12 @@ Fig.~\ref{fig:convergence} shows every proxy evaluation and the best score found
 \label{fig:convergence}
 \end{figure*}
 
-In \gentwo, random search again found its best setting early: 0.3340 at evaluation~3. PSO's best, 0.3290, was the last particle of round~1 (evaluation~8) and was never beaten; the best scores of rounds 2, 3 and 4 were 0.3176, 0.3237 and 0.3279. The swarm still converged, with round means of 0.267, 0.286, 0.300 and 0.319 and a within-round standard deviation that fell from 0.082 to 0.006. Over all 32 evaluations, PSO's mean proxy score was higher than that of random search in both generations (\genone 0.437 against 0.333; \gentwo 0.293 against 0.226), which reflects the swarm concentrating its later evaluations near good points rather than finding better ones. \gentwo has no proxy run of the defaults, so how the searched settings compare with the defaults on the \gentwo proxy is unknown.
+In \gentwo, random search again peaked early (0.3340 at evaluation~3). PSO's best, 0.3290, was the last particle of round~1 and was never beaten (round bests 0.3176, 0.3237 and 0.3279 afterwards), although the swarm still converged: the round means rose from 0.267 to 0.286, 0.300 and 0.319, and the within-round standard deviation fell from 0.082 to 0.006. In both generations, PSO's mean proxy score over all 32 evaluations exceeded that of random search (\genone 0.437 against 0.333; \gentwo 0.293 against 0.226), which reflects the swarm concentrating its later evaluations near good points rather than finding better ones. \gentwo has no proxy run of the defaults, so their standing on the \gentwo proxy is unknown.
 
 \subsection{Generation~1 Test Results (Studio Data)}
 \label{subsec:res-gen1}
 
-Table~\ref{tab:gen1-test} gives the one-time test results of the three \genone models on the 1,046 studio test images (7,415 boxes as counted by the evaluator; Table~\ref{tab:datasets} lists 7,413 because it leaves out 2 zero-size boxes). The arms score 0.676 (A), 0.672 (B) and 0.668 (C) \mapfifty, and 0.474, 0.475 and 0.471 \mapfiftyninetyfive. Every pairwise difference is small and every 95\% interval contains 0: on \mapfifty, B$-$A is $-0.004$ [$-0.016$, $+0.009$], C$-$A is $-0.008$ [$-0.021$, $+0.007$] and C$-$B is $-0.004$ [$-0.015$, $+0.007$], and the \mapfiftyninetyfive differences lead to the same verdict. On studio data, the three arms are therefore statistically tied, and the point estimates even place the defaults first and PSO last. Precision (0.746--0.747) and recall (0.581--0.587) are nearly identical. The validation scores of the full trainings point the same way: the defaults and PSO both reached 0.657, while random search, whose setting had the highest proxy score in \genone, reached the lowest value, 0.643.
+Table~\ref{tab:gen1-test} gives the one-time test results of the three \genone models on the 1,046 studio test images (7,415 boxes as counted by the evaluator; Table~\ref{tab:datasets} lists 7,413 because it leaves out 2 zero-size boxes). The arms score 0.676 (A), 0.672 (B) and 0.668 (C) \mapfifty, and every pairwise 95\% interval contains 0 on both metrics; the largest difference is C$-$A, $-0.008$ [$-0.021$, $+0.007$]. On studio data, the three arms are therefore statistically tied, and the point estimates even place the defaults first and PSO last; precision and recall are nearly identical. Validation points the same way: the defaults and PSO both reached 0.657, while random search, whose setting had the highest \genone proxy score, reached the lowest value, 0.643.
 
 \begin{table*}[!t]
 \centering
@@ -89,7 +89,7 @@ C$-$B & $-0.004$ [$-0.015$, $+0.007$] & 0.24 & $-0.003$ [$-0.011$, $+0.004$] & 0
 \parbox{\textwidth}{\footnotesize Val: best checkpoint on the validation split after 100 epochs. CIs: 1,000 paired bootstrap resamples of the test images. P and R at the confidence of maximum F1. ms/img: median batch-1 latency at 416~px on a laptop CPU (Intel Core Ultra~5 125H). $P(\Delta>0)$: share of resamples in which the first arm of the pair scored higher. A difference is significant only if its CI excludes 0.}
 \end{table*}
 
-Per class (Fig.~\ref{fig:gen1-perclass}), the arms differ by less than 0.02 AP@50 on five of the six classes. The exception is PLASTIC, where PSO scores 0.638 against 0.699 for the defaults and 0.693 for random search. PSO has the highest AP@50 on BIODEGRADABLE, GLASS and METAL (0.643, 0.765 and 0.754). Per-class AP has no confidence interval (Section~\ref{subsec:eval}). On the laptop CPU, the models took 31.4 (A), 38.3 (B) and 31.7~ms (C) per image; the three networks share one architecture, so the higher value for B most likely reflects other load on the laptop during timing.
+Per class (Fig.~\ref{fig:gen1-perclass}; per-class AP has no confidence interval, Section~\ref{subsec:eval}), the arms differ by less than 0.02 AP@50 on five of the six classes. The exception is PLASTIC, where PSO scores 0.638 against 0.699 (A) and 0.693 (B); PSO is highest on BIODEGRADABLE, GLASS and METAL. The three networks share one architecture, so the higher CPU latency of B (Table~\ref{tab:gen1-test}) most likely reflects other load on the laptop during timing.
 
 \begin{figure}[!t]
 \centering
@@ -101,9 +101,9 @@ Per class (Fig.~\ref{fig:gen1-perclass}), the arms differ by less than 0.02 AP@5
 \subsection{Generation~2 Test Results (Mixed Data)}
 \label{subsec:res-gen2}
 
-On the \gentwo validation split, the full trainings reached 0.454 (A), 0.473 (B) and 0.466 (C) \mapfifty. Table~\ref{tab:gen2-test} reports the one-time test results on the whole test split and on each domain. On the whole split (1,514 images, 8,192 boxes), the defaults score 0.479 [0.453, 0.513], random search 0.497 [0.471, 0.531] and PSO 0.500 [0.474, 0.534]. Both tuned arms are significantly better than the defaults: B$-$A is $+0.017$ [$+0.006$, $+0.030$] and C$-$A is $+0.020$ [$+0.011$, $+0.032$]. PSO and random search cannot be told apart: C$-$B is $+0.003$ [$-0.008$, $+0.015$]. The intervals of the single arms overlap widely; the gains over the defaults are resolved only because the bootstrap is paired, so that the variation in difficulty between test images, which all three models share, cancels in the differences. The \mapfiftyninetyfive verdicts agree with the \mapfifty verdicts in every pair and on every test set. The validation ranking of the two tuned arms did not carry over: random search was ahead on validation (0.473 against 0.466), whereas on test the two tie.
+Table~\ref{tab:gen2-test} reports the one-time \gentwo test results on the whole test split and on each domain. On the whole split, the defaults score 0.479, random search 0.497 and PSO 0.500 \mapfifty. Both tuned arms are significantly better than the defaults (B$-$A $+0.017$ [$+0.006$, $+0.030$], C$-$A $+0.020$ [$+0.011$, $+0.032$]), whereas PSO and random search cannot be told apart (C$-$B $+0.003$ [$-0.008$, $+0.015$]). The single-arm intervals overlap widely; the gains are resolved only because the paired bootstrap cancels the variation in image difficulty that all three models share. The \mapfiftyninetyfive verdicts agree with the \mapfifty verdicts everywhere. Random search led PSO on validation (0.473 against 0.466), but on test the two tie.
 
-The whole split is dominated by studio images, which contribute 7,413 of its 8,192 boxes, and the studio test set alone gives the same picture. On its 1,046 images, which are the \genone test images, B$-$A is $+0.024$ [$+0.009$, $+0.038$] and C$-$A is $+0.019$ [$+0.005$, $+0.033$], both significant, while C$-$B, $-0.005$ [$-0.018$, $+0.009$], is not. PSO and random search were thus not significantly different on the mixed, studio and real-world test sets (Section~\ref{subsec:res-domain}); their only significant difference is on the Indian test set, where all scores are near zero.
+Studio images contribute 7,413 of the 8,192 boxes, and the studio test set alone (the 1,046 \genone test images) gives the same picture: B$-$A ($+0.024$) and C$-$A ($+0.019$) are significant, C$-$B ($-0.005$) is not. PSO and random search thus differ significantly only on the Indian test set, where all scores are near zero (Section~\ref{subsec:res-domain}).
 
 \begin{table*}[!t]
 \centering
@@ -135,12 +135,12 @@ C: PSO & 0.343 [0.323, 0.374] & 0.398 [0.367, 0.439] & 0.248 [0.220, 0.336] & 0.
 \parbox{\textwidth}{\footnotesize All test sets were scored once, at 640~px, with 1,000 paired bootstrap resamples per test set. ``All'' is the whole \gentwo test split (studio plus real-world); India is DWSD, used for testing only. The \mapfiftyninetyfive differences give the same verdict as the \mapfifty differences in every cell. Validation \mapfifty: A 0.454, B 0.473, C 0.466.}
 \end{table*}
 
-On the whole split, PSO has the highest AP@50 on five of the seven classes (CARDBOARD, GLASS, METAL, PAPER and OTHER), random search on the other two (BIODEGRADABLE and PLASTIC), and the defaults on none. OTHER is very weak for every arm, with AP@50 between 0.050 and 0.063; all 132 OTHER test boxes come from the real-world images. Precision rises from 0.549 (A) to 0.563 (B) and 0.582 (C), and recall from 0.445 (A) to 0.470 for both tuned arms. On the Tesla T4 at 640~px, the median latency is 8.1 to 8.7~ms per image.
+Per class on the whole split, PSO has the highest AP@50 on five of the seven classes, random search on BIODEGRADABLE and PLASTIC, and the defaults on none. OTHER is very weak for every arm (AP@50 0.050--0.063); all 132 OTHER test boxes are in the real-world images. Precision rises from 0.549 (A) to 0.563 (B) and 0.582 (C), and recall from 0.445 (A) to 0.470 for both tuned arms. The median latency on the T4 at 640~px is 8.1 to 8.7~ms per image.
 
 \subsection{Domain Gap}
 \label{subsec:res-domain}
 
-Fig.~\ref{fig:domains} shows how the scores fall from one domain to the next. Averaged over the three arms, \mapfifty is about 0.59 on studio images, 0.31 on real-world images and 0.03 on the Indian images (ranges 0.571--0.595, 0.298--0.310 and 0.023--0.027). For every arm, the real-world score is roughly half the studio score.
+Averaged over the three \gentwo arms, test \mapfifty falls from about 0.59 on studio images to 0.31 on real-world and 0.03 on Indian images (Fig.~\ref{fig:domains}); for every arm, the real-world score is roughly half the studio score.
 
 \begin{figure}[!t]
 \centering
@@ -149,34 +149,49 @@ Fig.~\ref{fig:domains} shows how the scores fall from one domain to the next. Av
 \label{fig:domains}
 \end{figure}
 
-On the 468 real-world test images (TACO and HITL, 779 boxes), no pairwise difference is significant: B$-$A is $-0.012$ [$-0.118$, $+0.053$], C$-$A is $+0.001$ [$-0.111$, $+0.065$] and C$-$B is $+0.013$ [$-0.015$, $+0.036$]. The intervals are wide and lopsided, for example 0.310 [0.278, 0.440] for the defaults, because BIODEGRADABLE has a single box in this test set. Whether a resample leaves out or repeats that one image swings that class's AP, and the class is one seventh of the mean; the three arms score 0.249 (A), 0.020 (B) and 0.003 (C) AP@50 on that one box. With intervals 0.17 to 0.18 wide for B$-$A and C$-$A, this set cannot resolve differences of the size measured on the studio images (about 0.02).
+On the 468 real-world test images (TACO and HITL), no pairwise difference is significant (Table~\ref{tab:gen2-test}). The intervals are wide and lopsided because BIODEGRADABLE has a single box in this set: whether a resample leaves out or repeats that image swings that class's AP, one seventh of the mean, and the arms score 0.249 (A), 0.020 (B) and 0.003 (C) AP@50 on that box. With B$-$A and C$-$A intervals 0.17 to 0.18 wide, this set cannot resolve differences of the size measured on studio images (about 0.02).
 
-On the 700 DWSD images from India (4,502 boxes), all three models fail: \mapfifty is 0.027 [0.024, 0.031] for the defaults, 0.023 [0.021, 0.027] for random search and 0.027 [0.024, 0.031] for PSO, with precision between 0.070 and 0.075 and recall between 0.043 and 0.047. Only PLASTIC (0.089--0.101) and PAPER (0.028--0.035) reach an AP@50 above 0.01. Two differences are significant: the defaults are above random search (B$-$A $-0.003$ [$-0.006$, $-0.001$] \mapfifty), and so is PSO (C$-$B $+0.003$ [$+0.001$, $+0.006$]). Both are also significant on \mapfiftyninetyfive: B$-$A $-0.002$ [$-0.003$, $-0.001$] and C$-$B $+0.002$ [$+0.000$, $+0.003$], whose lower bound is 0.0004 before rounding. PSO and the defaults do not differ ($+0.000$ [$-0.003$, $+0.003$]). These significant differences are a few thousandths on scores near zero, so they carry no practical meaning.
+On the 700 DWSD images from India, all three models fail, with 0.023 to 0.027 \mapfifty, precision 0.070--0.075 and recall 0.043--0.047; only PLASTIC (0.089--0.101) and PAPER (0.028--0.035) exceed 0.01 AP@50. The defaults and PSO are both significantly above random search and do not differ from each other. On \mapfiftyninetyfive, the two significant differences are B$-$A $-0.002$ [$-0.003$, $-0.001$] and C$-$B $+0.002$ [$+0.000$, $+0.003$], whose lower bound is 0.0004 before rounding. These differences are a few thousandths on scores near zero, so they carry no practical meaning.
 
-Four causes of the failure are known from the data (Section~\ref{subsec:datasets}). First, no Indian image was used for training, search or model selection. Second, the DWSD images look augmented (rotated, with black corners and color tints), unlike any training image. Third, DWSD's boxes come from mask regions, so touching items of one class merge into one large box; a model that finds each item separately overlaps such a box poorly, so even correct detections often count as misses. Fourth, the mapping from mask values to classes was inferred from the images, and six of the fifteen values remain uncertain. The India score thus measures the difference in labeling style as well as the models.
+Four causes of the failure are known from the data (Section~\ref{subsec:datasets}): no Indian image was used for training, search or model selection; the DWSD images look augmented (rotated, with black corners and color tints), unlike any training image; DWSD's boxes come from mask regions, so touching items of one class merge into one large box that per-item detections overlap poorly, and even correct detections often count as misses; and the mapping from mask values to classes was inferred from the images, with six of the fifteen values uncertain. The India score thus measures the difference in labeling style as well as the models. Fig.~\ref{fig:samples} shows the three models on two studio and two DWSD test images: on the DWSD images each model predicts at most one box, against 4 and 19 ground-truth boxes, and on the first of them all three models box the region that the ground truth labels PAPER but call it PLASTIC.
 
-Whether the real-world training data of \gentwo improved accuracy on real-world photographs cannot be read from Table~\ref{tab:gen2-test}: the \genone models were never scored on real-world images, and the two generations differ in classes, image size and training data, so their numbers in Tables~\ref{tab:gen1-test} and~\ref{tab:gen2-test} are not one benchmark. Answering it requires both generations' models on the same test images, restricted to the six shared classes with OTHER removed (Section~\ref{subsec:eval}). Table~\ref{tab:g1g2} is reserved for this comparison, whose results are \textbf{[PENDING: Gen~1 vs Gen~2 comparison]}.
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{r_samples.jpg}
+\caption{Detections of the three \gentwo models on two studio and two Indian (DWSD) test images, next to the ground truth. The images were chosen by a fixed rule, not by eye: for each test set, the images with at least three ground-truth boxes were put in a random order with seed 0, and the first two are shown. Every model saw the same images at 640~px, with a confidence threshold of 0.25 and an NMS IoU of 0.7. Each box carries its class and, for predictions, its confidence; a label that would cover another is left out. The corner of each panel gives the number of ground-truth boxes or detections. These panels are illustrations, not evidence; the quantitative results are in Table~\ref{tab:gen2-test} and Fig.~\ref{fig:domains}. The DWSD ground-truth boxes come from mask regions, so touching items of one class can merge into one box.}
+\label{fig:samples}
+\end{figure*}
+
+The two generations differ in classes, image size and training data, so Tables~\ref{tab:gen1-test} and~\ref{tab:gen2-test} are not one benchmark. Table~\ref{tab:g1g2} therefore scores all six final models on the same studio and real-world test images, restricted to the six shared classes (Section~\ref{subsec:eval}). On the real-world images, every \gentwo arm is significantly better than every \genone arm: 0.338--0.353 \mapfifty against 0.038--0.096, about four to nine times as high. On the studio images, the order reverses: every \genone arm is significantly better than every \gentwo arm, by 0.074 to 0.105. Within each generation, no real-world difference is significant (e.g., \genone C$-$A $+0.048$ [$-0.020$, $+0.163$], \gentwo C$-$B $+0.013$ [$-0.019$, $+0.042$]), and the studio verdicts match Tables~\ref{tab:gen1-test} and~\ref{tab:gen2-test}. The 0.096 of \genone C and its wide interval come largely from the single real-world BIODEGRADABLE box, on which it scores 0.332 AP@50. \gentwo scores higher on real-world images here than in Table~\ref{tab:gen2-test} (A 0.353 against 0.310) only because OTHER is left out of the mean. As a check, \genone reproduces its own studio test result within 0.0004 \mapfifty.
 
 \begin{table}[!t]
 \centering
-\caption{\genone versus \gentwo on the Same Test Images (Six Shared Classes, OTHER Removed)}
+\caption{\genone versus \gentwo on the Same Test Images: Test \mapfifty [95\% CI] on the Six Shared Classes}
 \label{tab:g1g2}
 \footnotesize
 \begin{tabular}{@{}lcc@{}}
 \toprule
-Test \mapfifty & Studio (1,046 img.) & Real-world (468 img.) \\
+Model (px) & Real-world (468 img.) & Studio (1,046 img.) \\
 \midrule
-\multicolumn{3}{@{}c@{}}{\textbf{[PENDING: Gen~1 vs Gen~2 comparison]}} \\
+G1 A (416) & 0.047 [0.038, 0.080] & 0.676 [0.641, 0.719] \\
+G1 B (416) & 0.038 [0.031, 0.069] & 0.672 [0.636, 0.716] \\
+G1 C (416) & 0.096 [0.041, 0.214] & 0.669 [0.628, 0.716] \\
+\midrule
+G2 A (640) & 0.353 [0.315, 0.504] & 0.571 [0.529, 0.619] \\
+G2 B (640) & 0.338 [0.304, 0.473] & 0.595 [0.557, 0.639] \\
+G2 C (640) & 0.352 [0.315, 0.485] & 0.590 [0.550, 0.635] \\
+\midrule
+$\Delta$ G2$-$G1 & $+0.243$ to $+0.315$ & $-0.105$ to $-0.074$ \\
 \bottomrule
 \end{tabular}
 \\[2pt]
-\parbox{\columnwidth}{\footnotesize Each model runs at its own training image size; the best arm of each generation is chosen by its own validation score, never by the test score (Section~\ref{subsec:eval}).}
+\parbox{\columnwidth}{\footnotesize G1, G2: \genone, \gentwo; each model was scored once at its own training image size (px). Real-world: 647 boxes after removing OTHER, with a single BIODEGRADABLE box; studio: 7,413 boxes, no OTHER. CIs: 1,000 paired bootstrap resamples per test set. $\Delta$: range over all nine G2$-$G1 pairs, every one significant; e.g., real-world G2 B$-$G1 C $+0.243$ [$+0.134$, $+0.418$], studio G2 A$-$G1 A $-0.105$ [$-0.125$, $-0.084$]. On the five real-world classes with more than one box, \gentwo scores 0.239--0.618 AP@50 and \genone 0.008--0.117.}
 \end{table}
 
 \subsection{Compute Cost}
 \label{subsec:res-cost}
 
-Table~\ref{tab:compute} lists the recorded GPU time of every run. All runs used one Tesla T4, and the times cover training only; setup, data copies and idle time are excluded. The recorded total is 12.18 GPU-hours for \genone and 10.06 for \gentwo. A search took 1.91 to 2.54 hours and a full training 1.15 to 2.07 hours. Including its search, each tuned arm therefore cost about 2.7 to 2.8 times the GPU time of Arm~A, which needs no search. The budget was equal in evaluations, not in time: the mean proxy training took 214.3~s for PSO and 238.7~s for random search in \genone, and 285.5~s and 259.0~s in \gentwo. The largest single item in \genone was the proxy-validity check, at 4.36 hours, of which the eight 40-epoch medium runs took 3.84 hours. In \gentwo, about 24 further GPU-hours were lost when two sessions froze and sat idle until the platform's 12-hour limit; this time is not part of the totals. The one-time test evaluation took 283.1~s on the laptop CPU in \genone and 220.6~s on the T4 for the four \gentwo test sets.
+Table~\ref{tab:compute} lists the recorded GPU time of every run on one Tesla T4, covering training only (setup, data copies and idle time are excluded). Including its search, each tuned arm cost about 2.7 to 2.8 times the GPU time of Arm~A, which needs no search. The budget was equal in evaluations, not in time: the mean proxy training took 214.3~s for PSO and 238.7~s for random search in \genone, and 285.5~s and 259.0~s in \gentwo. The largest \genone item was the proxy-validity check, of which the eight 40-epoch medium runs took 3.84 of 4.36 hours. In \gentwo, about 24 further GPU-hours were lost when two sessions froze and sat idle until the platform's 12-hour limit; they are not in the totals. The one-time test evaluation took 283.1~s on the laptop CPU in \genone and 220.6~s on the T4 for the four \gentwo test sets.
 
 \begin{table}[!t]
 \centering
