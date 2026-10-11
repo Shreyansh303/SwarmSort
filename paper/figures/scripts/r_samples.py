@@ -4,7 +4,8 @@
     .venv/Scripts/python.exe paper/figures/scripts/r_samples.py --add-domain Real-world <build>/lists/test_real_world.txt
 
 Writes paper/figures/r_samples.jpg (300 dpi, JPEG quality 92, 7.16 in wide) and prints the chosen images, their ground-truth box
-counts and the number of boxes each model predicts on each of them.
+counts and the number of boxes each model predicts on each of them. If the Kaggle real-world bundle is in
+paper/figures/data/realworld/ (see "Real-world bundle" below), it also writes paper/figures/r_best.jpg.
 
 Rows are test images, columns are the ground truth and the three Gen 2 models (A: defaults, B: random search,
 C: PSO; weights in app/models/gen2/). Needs Ultralytics, which is installed in the project venv only.
@@ -29,9 +30,23 @@ More rows: a domain is any list of test images in YOLO format (labels at Ultraly
 labels/, class indices of the seven Gen 2 classes). --add-domain NAME LIST adds one from a text file with one image
 path per line, e.g. lists/test_real_world.txt of a local Gen 2 build (TACO and HITL); added rows go between Studio
 and India, the order of the domains in the paper. Rows of other domains do not change when one is added.
+
+Real-world bundle: the real-world test photos exist only on Kaggle. Notebook
+paper/figures/kaggle/paper_realworld_samples.ipynb runs r_export_realworld.py there and gives realworld_samples.zip;
+unzipped into paper/figures/data/realworld/ (--realworld) it holds the selected images, their labels and
+selection.json. When that folder exists (and --no-realworld is not given):
+  r_samples.jpg  gets a "Real-world" row between Studio (and any --add-domain rows) and India: selection A of the
+                 bundle, chosen on Kaggle by this script's own choose() rule over all 468 real-world test images.
+  r_best.jpg     (--best-out) is drawn too: the same columns, one row per best-case image (selection B of the bundle;
+                 a deliberately favorable, rule-based choice; the rule, the level used and every model's totals are
+                 in selection.json and printed here for the caption).
+Bundle rows draw the boxes recorded on Kaggle, the ones the selection was scored on. The models are also run here on
+the bundle images and any difference from the recorded boxes is printed. Without the folder the output is the
+figure of the paper as before.
 """
 import argparse
 import csv
+import json
 import random
 import sys
 import tempfile
@@ -51,6 +66,8 @@ import build_dataset as bd  # noqa: E402
 from verify_dataset import parse_label  # noqa: E402
 
 OUT = REPO / "paper" / "figures" / "r_samples.jpg"
+BEST_OUT = REPO / "paper" / "figures" / "r_best.jpg"
+REALWORLD = REPO / "paper" / "figures" / "data" / "realworld"  # the unzipped Kaggle bundle (r_export_realworld.py)
 SOURCES = REPO / "configs" / "gen2" / "sources.yaml"
 SPLIT_CSV = REPO / "configs" / "split.csv"
 WEIGHTS = REPO / "app" / "models" / "gen2"
@@ -139,6 +156,63 @@ def choose(paths):
     cands = sorted((p for p in paths if len(ground_truth(p)) >= MIN_BOXES), key=lambda p: p.name)
     order = random.Random(SEED).sample(cands, len(cands))
     return order[:N_PER_DOMAIN], len(cands)
+
+
+def predict_boxes(model, path):
+    """[(cls, x0, y0, x1, y1, conf)] normalized, lowest confidence first."""
+    res = model.predict(str(path), **PREDICT)[0]
+    xyxyn = res.boxes.xyxyn.cpu().numpy()
+    cls = res.boxes.cls.cpu().numpy().astype(int)
+    conf = res.boxes.conf.cpu().numpy()
+    return sorted([(int(c), *map(float, b), float(s)) for b, c, s in zip(xyxyn, cls, conf)], key=lambda t: t[-1])
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The Kaggle real-world bundle (r_export_realworld.py): images chosen and predicted there
+# ---------------------------------------------------------------------------------------------------------------
+def load_bundle(folder):
+    """selection.json of an unzipped bundle, or None if there is none."""
+    sel = Path(folder) / "selection.json"
+    if not sel.is_file():
+        return None
+    return json.loads(sel.read_text(encoding="utf-8"))
+
+
+def same_boxes(a, b, tol=0.01):
+    """Same classes and boxes (coordinates and confidence within tol), in any order."""
+    if len(a) != len(b):
+        return False
+    a, b = sorted(a), sorted(b)
+    return all(x[0] == y[0] and max(abs(u - v) for u, v in zip(x[1:], y[1:])) <= tol for x, y in zip(a, b))
+
+
+def bundle_rows(name, folder, selection, models):
+    """Figure rows from one selection of the bundle, drawing the boxes recorded on Kaggle."""
+    rows = []
+    for e in selection["images"]:
+        path = Path(folder) / "images" / e["file"]
+        gt = ground_truth(path)
+        if len(gt) != e["n_gt"]:
+            raise SystemExit(f"{path}: {len(gt)} ground-truth boxes, but selection.json says {e['n_gt']}")
+        preds = {arm: sorted((tuple(b) for b in e["models"][arm]["boxes"]), key=lambda t: t[-1])
+                 for arm, _ in ARMS}
+        stats = "; ".join(f"{arm} TP {e['models'][arm]['tp']} FP {e['models'][arm]['fp']} FN {e['models'][arm]['fn']}"
+                          for arm, _ in ARMS)
+        print(f"    {e['file']} [{e.get('source') or 'source unknown'}]: ground truth {len(gt)} boxes; {stats}")
+        if not e.get("downscaled"):  # a downscaled image cannot give exactly the same boxes
+            differ = [arm for arm, m in models.items() if not same_boxes(predict_boxes(m, path), preds[arm])]
+            print("      local re-prediction: " + (f"DIFFERS for {', '.join(differ)} (the recorded Kaggle boxes "
+                                                     f"are drawn)" if differ else "same boxes as recorded"))
+        rows.append((name, path, gt, preds))
+    return rows
+
+
+def print_bundle_totals(bundle):
+    t = bundle["totals"]
+    print(f"  Kaggle totals over {t['images_scored']} real-world test images: "
+          + ", ".join(f"{arm} fully correct {t['per_model'][arm]['fully_correct']}, mean F1 "
+                      f"{t['per_model'][arm]['mean_f1']:.3f}" for arm, _ in ARMS)
+          + f"; all three {t['fully_correct_all_three']}")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -263,12 +337,22 @@ def main(argv=None):
     ap.add_argument("--add-domain", nargs=2, action="append", default=[], metavar=("NAME", "LIST"),
                     help="add a row domain from a text file of test image paths (YOLO labels next to them)")
     ap.add_argument("--out", default=str(OUT))
+    ap.add_argument("--realworld", default=str(REALWORLD), help="the unzipped Kaggle real-world bundle (used if it "
+                    "has a selection.json)")
+    ap.add_argument("--no-realworld", action="store_true", help="ignore the real-world bundle")
+    ap.add_argument("--best-out", default=str(BEST_OUT), help="the best-case figure (drawn from the bundle)")
     args = ap.parse_args(argv)
 
     from ultralytics import YOLO  # project venv only
 
+    bundle = None if args.no_realworld else load_bundle(args.realworld)
+    if bundle is not None and any(name == "Real-world" for name, _ in args.add_domain):
+        raise SystemExit("the real-world bundle already adds a 'Real-world' row: drop --add-domain Real-world or "
+                         "pass --no-realworld")
     domains = [("Studio", studio_images, (1046, 7413))]
     domains += [(name, (lambda tmp, p=lst: read_list(p)), None) for name, lst in args.add_domain]
+    if bundle is not None:
+        domains += [("Real-world", None, None)]  # rows chosen and predicted on Kaggle (selection A)
     domains += [("India (DWSD)", dwsd_images, (700, 4502))]
 
     models = {arm: YOLO(str(WEIGHTS / f"arm_{arm.lower()}.pt")) for arm, _ in ARMS}
@@ -278,6 +362,13 @@ def main(argv=None):
     rows = []
     with tempfile.TemporaryDirectory() as tmp:
         for name, get_images, expected in domains:
+            if get_images is None:
+                sel = bundle["selection_a"]
+                print(f"{name} (Kaggle bundle {args.realworld}): {bundle['totals']['images']} test images, "
+                      f"{bundle['totals']['boxes']} boxes\n  {sel['candidates']} images with >= {MIN_BOXES} boxes; "
+                      f"chosen (seed {SEED}): " + ", ".join(e["file"] for e in sel["images"]))
+                rows += bundle_rows(name, args.realworld, sel, models)
+                continue
             paths = get_images(tmp)
             n_boxes = sum(len(ground_truth(p)) for p in paths)
             print(f"{name}: {len(paths)} test images, {n_boxes} boxes")
@@ -288,19 +379,24 @@ def main(argv=None):
                   + ", ".join(p.name for p in chosen))
             for p in chosen:
                 gt = ground_truth(p)
-                preds = {}
-                for arm, m in models.items():
-                    res = m.predict(str(p), **PREDICT)[0]
-                    xyxyn = res.boxes.xyxyn.cpu().numpy()
-                    cls = res.boxes.cls.cpu().numpy().astype(int)
-                    conf = res.boxes.conf.cpu().numpy()
-                    preds[arm] = sorted([(int(c), *map(float, b), float(s)) for b, c, s in zip(xyxyn, cls, conf)],
-                                        key=lambda t: t[-1])
+                preds = {arm: predict_boxes(m, p) for arm, m in models.items()}
                 print(f"    {p.name}: ground truth {len(gt)} boxes; predicted "
                       + ", ".join(f"{arm} {len(preds[arm])}" for arm, _ in ARMS))
                 rows.append((name, p, gt, preds))
         make_figure(rows, args.out)  # inside the with block: the images live in the temporary folder
     print("Wrote", args.out)
+
+    if bundle is not None:
+        sel = bundle["selection_b"]
+        levels = "; ".join(f"level {lv['level']} (n_gt >= {lv['min_gt']}, fully correct for >= "
+                           f"{lv['min_models_fully_correct']} models) {lv['candidates']}" for lv in sel["levels"])
+        print(f"Best cases (selection B, deliberately favorable): candidates {levels}; level used "
+              f"{sel['level_used']}")
+        print_bundle_totals(bundle)
+        if not sel["images"]:
+            raise SystemExit("selection B of the bundle is empty: no best-case figure")
+        make_figure(bundle_rows("Real-world", args.realworld, sel, models), args.best_out)
+        print("Wrote", args.best_out)
 
 
 if __name__ == "__main__":
