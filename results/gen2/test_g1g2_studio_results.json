@@ -1,0 +1,1925 @@
+{
+  "split": "test",
+  "data": "/tmp/g1g2_studio/data.yaml",
+  "images": 1046,
+  "boxes": 7413,
+  "boxes_per_class": {
+    "BIODEGRADABLE": 4531,
+    "CARDBOARD": 392,
+    "GLASS": 822,
+    "METAL": 588,
+    "PAPER": 527,
+    "PLASTIC": 553
+  },
+  "settings": {
+    "imgsz": {
+      "G1A": 416,
+      "G1B": 416,
+      "G1C": 416,
+      "G2A": 640,
+      "G2B": 640,
+      "G2C": 640
+    },
+    "batch": 32,
+    "rect": true,
+    "conf": 0.001,
+    "iou": 0.7,
+    "max_det": {
+      "G1A": 321,
+      "G1B": 321,
+      "G1C": 321,
+      "G2A": 320,
+      "G2B": 320,
+      "G2C": 320
+    },
+    "precision": {
+      "G1A": "fp32",
+      "G1B": "fp32",
+      "G1C": "fp32",
+      "G2A": "fp32",
+      "G2B": "fp32",
+      "G2C": "fp32"
+    },
+    "confusion_matrix": "conf 0.25, IoU 0.45 (Ultralytics' validator default)",
+    "latency": {
+      "images": 100,
+      "warmup": 10,
+      "batch": 1,
+      "conf": 0.25
+    },
+    "bootstrap_resamples": 1000,
+    "seed": 0,
+    "ci": "95% percentile",
+    "samples_conf": 0.25,
+    "checks_skipped": false,
+    "classes": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "models": {
+    "G1A": {
+      "name": "Gen 1 Defaults",
+      "path": "app/models/arm_a.pt",
+      "sha256_12": "072a560597f6",
+      "max_det": 321,
+      "conf": 0.001,
+      "run_dir": "results/gen2/runs/eval_test_g1g2_studio_G1A",
+      "metrics": {
+        "map50": 0.6757,
+        "map50_95": 0.47393,
+        "precision": 0.74993,
+        "recall": 0.57819
+      },
+      "per_class": {
+        "BIODEGRADABLE": {
+          "ap50": 0.6323,
+          "ap50_95": 0.35312
+        },
+        "CARDBOARD": {
+          "ap50": 0.64064,
+          "ap50_95": 0.49072
+        },
+        "GLASS": {
+          "ap50": 0.74654,
+          "ap50_95": 0.56523
+        },
+        "METAL": {
+          "ap50": 0.75058,
+          "ap50_95": 0.53249
+        },
+        "PAPER": {
+          "ap50": 0.58343,
+          "ap50_95": 0.42346
+        },
+        "PLASTIC": {
+          "ap50": 0.70073,
+          "ap50_95": 0.47858
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "BIODEGRADABLE",
+          "CARDBOARD",
+          "GLASS",
+          "METAL",
+          "PAPER",
+          "PLASTIC",
+          "background"
+        ],
+        "rows": "predicted",
+        "columns": "true",
+        "counts": [
+          [
+            2575,
+            1,
+            3,
+            2,
+            2,
+            2,
+            895
+          ],
+          [
+            2,
+            229,
+            2,
+            3,
+            9,
+            4,
+            118
+          ],
+          [
+            3,
+            2,
+            539,
+            8,
+            0,
+            11,
+            121
+          ],
+          [
+            0,
+            2,
+            12,
+            416,
+            6,
+            10,
+            190
+          ],
+          [
+            1,
+            12,
+            3,
+            4,
+            310,
+            4,
+            234
+          ],
+          [
+            0,
+            1,
+            10,
+            31,
+            4,
+            355,
+            145
+          ],
+          [
+            1950,
+            145,
+            253,
+            124,
+            196,
+            167,
+            0
+          ]
+        ],
+        "normalized": [
+          [
+            0.5683,
+            0.0026,
+            0.0036,
+            0.0034,
+            0.0038,
+            0.0036,
+            0.5255
+          ],
+          [
+            0.0004,
+            0.5842,
+            0.0024,
+            0.0051,
+            0.0171,
+            0.0072,
+            0.0693
+          ],
+          [
+            0.0007,
+            0.0051,
+            0.6557,
+            0.0136,
+            0.0,
+            0.0199,
+            0.0711
+          ],
+          [
+            0.0,
+            0.0051,
+            0.0146,
+            0.7075,
+            0.0114,
+            0.0181,
+            0.1116
+          ],
+          [
+            0.0002,
+            0.0306,
+            0.0036,
+            0.0068,
+            0.5882,
+            0.0072,
+            0.1374
+          ],
+          [
+            0.0,
+            0.0026,
+            0.0122,
+            0.0527,
+            0.0076,
+            0.642,
+            0.0851
+          ],
+          [
+            0.4304,
+            0.3699,
+            0.3078,
+            0.2109,
+            0.3719,
+            0.302,
+            0.0
+          ]
+        ]
+      },
+      "consistency_check": {
+        "map50_ultralytics": 0.6757040136776103,
+        "map50_recomputed": 0.6757040136776103,
+        "map50_95_ultralytics": 0.47393438655936376,
+        "map50_95_recomputed": 0.47393438655936376,
+        "max_abs_diff": 0.0,
+        "tolerance": 0.0001,
+        "passed": true
+      },
+      "speed": {
+        "ms_per_img": 7.62,
+        "fps": 131.2,
+        "images": 100,
+        "warmup": 10,
+        "batch": 1,
+        "imgsz": 416,
+        "conf": 0.25,
+        "device": "Tesla T4"
+      },
+      "bootstrap": {
+        "map50_ci95": [
+          0.6405097497607569,
+          0.7193940479581007
+        ],
+        "map50_95_ci95": [
+          0.4423278375526857,
+          0.5142530785662441
+        ],
+        "map50_mean": 0.6789823682409198,
+        "map50_95_mean": 0.4779182388007853
+      }
+    },
+    "G1B": {
+      "name": "Gen 1 Random search",
+      "path": "app/models/arm_b.pt",
+      "sha256_12": "9efcd33c79b0",
+      "max_det": 321,
+      "conf": 0.001,
+      "run_dir": "results/gen2/runs/eval_test_g1g2_studio_G1B",
+      "metrics": {
+        "map50": 0.67239,
+        "map50_95": 0.47451,
+        "precision": 0.75868,
+        "recall": 0.57906
+      },
+      "per_class": {
+        "BIODEGRADABLE": {
+          "ap50": 0.63105,
+          "ap50_95": 0.35562
+        },
+        "CARDBOARD": {
+          "ap50": 0.63142,
+          "ap50_95": 0.47312
+        },
+        "GLASS": {
+          "ap50": 0.75564,
+          "ap50_95": 0.57186
+        },
+        "METAL": {
+          "ap50": 0.73534,
+          "ap50_95": 0.53704
+        },
+        "PAPER": {
+          "ap50": 0.59075,
+          "ap50_95": 0.42878
+        },
+        "PLASTIC": {
+          "ap50": 0.69017,
+          "ap50_95": 0.48063
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "BIODEGRADABLE",
+          "CARDBOARD",
+          "GLASS",
+          "METAL",
+          "PAPER",
+          "PLASTIC",
+          "background"
+        ],
+        "rows": "predicted",
+        "columns": "true",
+        "counts": [
+          [
+            2678,
+            0,
+            6,
+            3,
+            8,
+            0,
+            1095
+          ],
+          [
+            2,
+            242,
+            2,
+            5,
+            11,
+            2,
+            170
+          ],
+          [
+            0,
+            2,
+            534,
+            7,
+            1,
+            7,
+            123
+          ],
+          [
+            0,
+            0,
+            18,
+            421,
+            12,
+            16,
+            198
+          ],
+          [
+            0,
+            7,
+            3,
+            6,
+            314,
+            5,
+            270
+          ],
+          [
+            3,
+            2,
+            10,
+            35,
+            3,
+            364,
+            167
+          ],
+          [
+            1848,
+            139,
+            249,
+            111,
+            178,
+            159,
+            0
+          ]
+        ],
+        "normalized": [
+          [
+            0.591,
+            0.0,
+            0.0073,
+            0.0051,
+            0.0152,
+            0.0,
+            0.5413
+          ],
+          [
+            0.0004,
+            0.6173,
+            0.0024,
+            0.0085,
+            0.0209,
+            0.0036,
+            0.084
+          ],
+          [
+            0.0,
+            0.0051,
+            0.6496,
+            0.0119,
+            0.0019,
+            0.0127,
+            0.0608
+          ],
+          [
+            0.0,
+            0.0,
+            0.0219,
+            0.716,
+            0.0228,
+            0.0289,
+            0.0979
+          ],
+          [
+            0.0,
+            0.0179,
+            0.0036,
+            0.0102,
+            0.5958,
+            0.009,
+            0.1335
+          ],
+          [
+            0.0007,
+            0.0051,
+            0.0122,
+            0.0595,
+            0.0057,
+            0.6582,
+            0.0826
+          ],
+          [
+            0.4079,
+            0.3546,
+            0.3029,
+            0.1888,
+            0.3378,
+            0.2875,
+            0.0
+          ]
+        ]
+      },
+      "consistency_check": {
+        "map50_ultralytics": 0.6723939441275691,
+        "map50_recomputed": 0.6723939441275691,
+        "map50_95_ultralytics": 0.4745087404347379,
+        "map50_95_recomputed": 0.4745087404347379,
+        "max_abs_diff": 0.0,
+        "tolerance": 0.0001,
+        "passed": true
+      },
+      "speed": {
+        "ms_per_img": 7.45,
+        "fps": 134.3,
+        "images": 100,
+        "warmup": 10,
+        "batch": 1,
+        "imgsz": 416,
+        "conf": 0.25,
+        "device": "Tesla T4"
+      },
+      "bootstrap": {
+        "map50_ci95": [
+          0.6361757931772862,
+          0.7160208236110911
+        ],
+        "map50_95_ci95": [
+          0.44291392166977434,
+          0.5161706466377248
+        ],
+        "map50_mean": 0.6761009210272025,
+        "map50_95_mean": 0.47877609640310664
+      }
+    },
+    "G1C": {
+      "name": "Gen 1 PSO",
+      "path": "app/models/arm_c.pt",
+      "sha256_12": "8d10d238c27b",
+      "max_det": 321,
+      "conf": 0.001,
+      "run_dir": "results/gen2/runs/eval_test_g1g2_studio_G1C",
+      "metrics": {
+        "map50": 0.66872,
+        "map50_95": 0.47141,
+        "precision": 0.75281,
+        "recall": 0.58434
+      },
+      "per_class": {
+        "BIODEGRADABLE": {
+          "ap50": 0.64471,
+          "ap50_95": 0.3603
+        },
+        "CARDBOARD": {
+          "ap50": 0.6254,
+          "ap50_95": 0.46613
+        },
+        "GLASS": {
+          "ap50": 0.7626,
+          "ap50_95": 0.5678
+        },
+        "METAL": {
+          "ap50": 0.75364,
+          "ap50_95": 0.54762
+        },
+        "PAPER": {
+          "ap50": 0.5918,
+          "ap50_95": 0.43782
+        },
+        "PLASTIC": {
+          "ap50": 0.6342,
+          "ap50_95": 0.44877
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "BIODEGRADABLE",
+          "CARDBOARD",
+          "GLASS",
+          "METAL",
+          "PAPER",
+          "PLASTIC",
+          "background"
+        ],
+        "rows": "predicted",
+        "columns": "true",
+        "counts": [
+          [
+            2748,
+            0,
+            4,
+            0,
+            5,
+            0,
+            1036
+          ],
+          [
+            0,
+            235,
+            1,
+            1,
+            8,
+            3,
+            160
+          ],
+          [
+            0,
+            2,
+            561,
+            5,
+            1,
+            10,
+            146
+          ],
+          [
+            1,
+            1,
+            16,
+            435,
+            9,
+            6,
+            178
+          ],
+          [
+            2,
+            12,
+            1,
+            2,
+            316,
+            8,
+            291
+          ],
+          [
+            3,
+            1,
+            7,
+            45,
+            4,
+            352,
+            168
+          ],
+          [
+            1777,
+            141,
+            232,
+            100,
+            184,
+            174,
+            0
+          ]
+        ],
+        "normalized": [
+          [
+            0.6065,
+            0.0,
+            0.0049,
+            0.0,
+            0.0095,
+            0.0,
+            0.5235
+          ],
+          [
+            0.0,
+            0.5995,
+            0.0012,
+            0.0017,
+            0.0152,
+            0.0054,
+            0.0808
+          ],
+          [
+            0.0,
+            0.0051,
+            0.6825,
+            0.0085,
+            0.0019,
+            0.0181,
+            0.0738
+          ],
+          [
+            0.0002,
+            0.0026,
+            0.0195,
+            0.7398,
+            0.0171,
+            0.0108,
+            0.0899
+          ],
+          [
+            0.0004,
+            0.0306,
+            0.0012,
+            0.0034,
+            0.5996,
+            0.0145,
+            0.147
+          ],
+          [
+            0.0007,
+            0.0026,
+            0.0085,
+            0.0765,
+            0.0076,
+            0.6365,
+            0.0849
+          ],
+          [
+            0.3922,
+            0.3597,
+            0.2822,
+            0.1701,
+            0.3491,
+            0.3146,
+            0.0
+          ]
+        ]
+      },
+      "consistency_check": {
+        "map50_ultralytics": 0.6687232773241192,
+        "map50_recomputed": 0.6687232773241192,
+        "map50_95_ultralytics": 0.4714051395592161,
+        "map50_95_recomputed": 0.4714051395592161,
+        "max_abs_diff": 0.0,
+        "tolerance": 0.0001,
+        "passed": true
+      },
+      "speed": {
+        "ms_per_img": 7.46,
+        "fps": 134.1,
+        "images": 100,
+        "warmup": 10,
+        "batch": 1,
+        "imgsz": 416,
+        "conf": 0.25,
+        "device": "Tesla T4"
+      },
+      "bootstrap": {
+        "map50_ci95": [
+          0.6278264488467099,
+          0.7155856887714388
+        ],
+        "map50_95_ci95": [
+          0.43822222863777016,
+          0.5133871096130463
+        ],
+        "map50_mean": 0.6721585685362065,
+        "map50_95_mean": 0.4753786766653573
+      }
+    },
+    "G2A": {
+      "name": "Gen 2 Defaults",
+      "path": "results/gen2/runs/arm_a/weights/best.pt",
+      "sha256_12": "e885e035f1e2",
+      "max_det": 320,
+      "conf": 0.001,
+      "run_dir": "results/gen2/runs/eval_test_g1g2_studio_G2A",
+      "metrics": {
+        "map50": 0.57118,
+        "map50_95": 0.38552,
+        "precision": 0.66039,
+        "recall": 0.51417
+      },
+      "per_class": {
+        "BIODEGRADABLE": {
+          "ap50": 0.61364,
+          "ap50_95": 0.33916
+        },
+        "CARDBOARD": {
+          "ap50": 0.55013,
+          "ap50_95": 0.40061
+        },
+        "GLASS": {
+          "ap50": 0.63112,
+          "ap50_95": 0.45235
+        },
+        "METAL": {
+          "ap50": 0.65094,
+          "ap50_95": 0.46394
+        },
+        "PAPER": {
+          "ap50": 0.4417,
+          "ap50_95": 0.30931
+        },
+        "PLASTIC": {
+          "ap50": 0.53959,
+          "ap50_95": 0.34776
+        },
+        "OTHER": {
+          "ap50": null,
+          "ap50_95": null
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "BIODEGRADABLE",
+          "CARDBOARD",
+          "GLASS",
+          "METAL",
+          "PAPER",
+          "PLASTIC",
+          "OTHER",
+          "background"
+        ],
+        "rows": "predicted",
+        "columns": "true",
+        "counts": [
+          [
+            2525,
+            0,
+            7,
+            5,
+            9,
+            5,
+            0,
+            857
+          ],
+          [
+            3,
+            211,
+            2,
+            3,
+            26,
+            2,
+            0,
+            146
+          ],
+          [
+            2,
+            1,
+            479,
+            24,
+            2,
+            30,
+            0,
+            206
+          ],
+          [
+            1,
+            4,
+            29,
+            393,
+            19,
+            17,
+            0,
+            242
+          ],
+          [
+            0,
+            19,
+            1,
+            5,
+            238,
+            11,
+            0,
+            236
+          ],
+          [
+            0,
+            2,
+            21,
+            21,
+            10,
+            275,
+            0,
+            185
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            2000,
+            155,
+            283,
+            137,
+            223,
+            213,
+            0,
+            0
+          ]
+        ],
+        "normalized": [
+          [
+            0.5573,
+            0.0,
+            0.0085,
+            0.0085,
+            0.0171,
+            0.009,
+            0.0,
+            0.4578
+          ],
+          [
+            0.0007,
+            0.5383,
+            0.0024,
+            0.0051,
+            0.0493,
+            0.0036,
+            0.0,
+            0.078
+          ],
+          [
+            0.0004,
+            0.0026,
+            0.5827,
+            0.0408,
+            0.0038,
+            0.0542,
+            0.0,
+            0.11
+          ],
+          [
+            0.0002,
+            0.0102,
+            0.0353,
+            0.6684,
+            0.0361,
+            0.0307,
+            0.0,
+            0.1293
+          ],
+          [
+            0.0,
+            0.0485,
+            0.0012,
+            0.0085,
+            0.4516,
+            0.0199,
+            0.0,
+            0.1261
+          ],
+          [
+            0.0,
+            0.0051,
+            0.0255,
+            0.0357,
+            0.019,
+            0.4973,
+            0.0,
+            0.0988
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.4414,
+            0.3954,
+            0.3443,
+            0.233,
+            0.4231,
+            0.3852,
+            0.0,
+            0.0
+          ]
+        ]
+      },
+      "consistency_check": {
+        "map50_ultralytics": 0.5711848106138745,
+        "map50_recomputed": 0.5711848106138745,
+        "map50_95_ultralytics": 0.385521521712683,
+        "map50_95_recomputed": 0.385521521712683,
+        "max_abs_diff": 0.0,
+        "tolerance": 0.0001,
+        "passed": true
+      },
+      "speed": {
+        "ms_per_img": 8.65,
+        "fps": 115.6,
+        "images": 100,
+        "warmup": 10,
+        "batch": 1,
+        "imgsz": 640,
+        "conf": 0.25,
+        "device": "Tesla T4"
+      },
+      "bootstrap": {
+        "map50_ci95": [
+          0.5292459987989271,
+          0.6190036714024947
+        ],
+        "map50_95_ci95": [
+          0.3557486817145258,
+          0.42479996921268415
+        ],
+        "map50_mean": 0.5750233055044761,
+        "map50_95_mean": 0.389504558225452
+      }
+    },
+    "G2B": {
+      "name": "Gen 2 Random search",
+      "path": "results/gen2/runs/arm_b/weights/best.pt",
+      "sha256_12": "55d2355a84a4",
+      "max_det": 320,
+      "conf": 0.001,
+      "run_dir": "results/gen2/runs/eval_test_g1g2_studio_G2B",
+      "metrics": {
+        "map50": 0.59488,
+        "map50_95": 0.40443,
+        "precision": 0.69446,
+        "recall": 0.51547
+      },
+      "per_class": {
+        "BIODEGRADABLE": {
+          "ap50": 0.62844,
+          "ap50_95": 0.34984
+        },
+        "CARDBOARD": {
+          "ap50": 0.56989,
+          "ap50_95": 0.42112
+        },
+        "GLASS": {
+          "ap50": 0.65786,
+          "ap50_95": 0.47529
+        },
+        "METAL": {
+          "ap50": 0.66312,
+          "ap50_95": 0.4656
+        },
+        "PAPER": {
+          "ap50": 0.46191,
+          "ap50_95": 0.3264
+        },
+        "PLASTIC": {
+          "ap50": 0.58808,
+          "ap50_95": 0.38832
+        },
+        "OTHER": {
+          "ap50": null,
+          "ap50_95": null
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "BIODEGRADABLE",
+          "CARDBOARD",
+          "GLASS",
+          "METAL",
+          "PAPER",
+          "PLASTIC",
+          "OTHER",
+          "background"
+        ],
+        "rows": "predicted",
+        "columns": "true",
+        "counts": [
+          [
+            2704,
+            1,
+            4,
+            8,
+            12,
+            3,
+            0,
+            1098
+          ],
+          [
+            6,
+            231,
+            0,
+            5,
+            24,
+            2,
+            0,
+            201
+          ],
+          [
+            2,
+            2,
+            467,
+            15,
+            3,
+            17,
+            0,
+            177
+          ],
+          [
+            1,
+            2,
+            37,
+            390,
+            23,
+            11,
+            0,
+            230
+          ],
+          [
+            0,
+            19,
+            3,
+            4,
+            240,
+            9,
+            0,
+            213
+          ],
+          [
+            0,
+            2,
+            16,
+            26,
+            6,
+            319,
+            0,
+            169
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1818,
+            135,
+            295,
+            140,
+            219,
+            192,
+            0,
+            0
+          ]
+        ],
+        "normalized": [
+          [
+            0.5968,
+            0.0026,
+            0.0049,
+            0.0136,
+            0.0228,
+            0.0054,
+            0.0,
+            0.5259
+          ],
+          [
+            0.0013,
+            0.5893,
+            0.0,
+            0.0085,
+            0.0455,
+            0.0036,
+            0.0,
+            0.0963
+          ],
+          [
+            0.0004,
+            0.0051,
+            0.5681,
+            0.0255,
+            0.0057,
+            0.0307,
+            0.0,
+            0.0848
+          ],
+          [
+            0.0002,
+            0.0051,
+            0.045,
+            0.6633,
+            0.0436,
+            0.0199,
+            0.0,
+            0.1102
+          ],
+          [
+            0.0,
+            0.0485,
+            0.0036,
+            0.0068,
+            0.4554,
+            0.0163,
+            0.0,
+            0.102
+          ],
+          [
+            0.0,
+            0.0051,
+            0.0195,
+            0.0442,
+            0.0114,
+            0.5769,
+            0.0,
+            0.0809
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.4012,
+            0.3444,
+            0.3589,
+            0.2381,
+            0.4156,
+            0.3472,
+            0.0,
+            0.0
+          ]
+        ]
+      },
+      "consistency_check": {
+        "map50_ultralytics": 0.5948818629807653,
+        "map50_recomputed": 0.5948818629807653,
+        "map50_95_ultralytics": 0.4044272178152039,
+        "map50_95_recomputed": 0.4044272178152039,
+        "max_abs_diff": 0.0,
+        "tolerance": 0.0001,
+        "passed": true
+      },
+      "speed": {
+        "ms_per_img": 8.69,
+        "fps": 115.1,
+        "images": 100,
+        "warmup": 10,
+        "batch": 1,
+        "imgsz": 640,
+        "conf": 0.25,
+        "device": "Tesla T4"
+      },
+      "bootstrap": {
+        "map50_ci95": [
+          0.5573850612431761,
+          0.6394100609445065
+        ],
+        "map50_95_ci95": [
+          0.37390555566343364,
+          0.4419224387395303
+        ],
+        "map50_mean": 0.5986179979600377,
+        "map50_95_mean": 0.40844323509961
+      }
+    },
+    "G2C": {
+      "name": "Gen 2 PSO",
+      "path": "results/gen2/runs/arm_c/weights/best.pt",
+      "sha256_12": "1f2c6169597c",
+      "max_det": 320,
+      "conf": 0.001,
+      "run_dir": "results/gen2/runs/eval_test_g1g2_studio_G2C",
+      "metrics": {
+        "map50": 0.58975,
+        "map50_95": 0.39843,
+        "precision": 0.67673,
+        "recall": 0.53285
+      },
+      "per_class": {
+        "BIODEGRADABLE": {
+          "ap50": 0.61911,
+          "ap50_95": 0.34621
+        },
+        "CARDBOARD": {
+          "ap50": 0.56588,
+          "ap50_95": 0.39822
+        },
+        "GLASS": {
+          "ap50": 0.66801,
+          "ap50_95": 0.47928
+        },
+        "METAL": {
+          "ap50": 0.68138,
+          "ap50_95": 0.47659
+        },
+        "PAPER": {
+          "ap50": 0.46557,
+          "ap50_95": 0.32873
+        },
+        "PLASTIC": {
+          "ap50": 0.53853,
+          "ap50_95": 0.36152
+        },
+        "OTHER": {
+          "ap50": null,
+          "ap50_95": null
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "BIODEGRADABLE",
+          "CARDBOARD",
+          "GLASS",
+          "METAL",
+          "PAPER",
+          "PLASTIC",
+          "OTHER",
+          "background"
+        ],
+        "rows": "predicted",
+        "columns": "true",
+        "counts": [
+          [
+            2669,
+            2,
+            5,
+            14,
+            8,
+            3,
+            0,
+            1072
+          ],
+          [
+            3,
+            233,
+            6,
+            1,
+            27,
+            2,
+            0,
+            188
+          ],
+          [
+            5,
+            1,
+            488,
+            23,
+            3,
+            27,
+            0,
+            178
+          ],
+          [
+            0,
+            2,
+            45,
+            401,
+            14,
+            19,
+            0,
+            206
+          ],
+          [
+            0,
+            19,
+            4,
+            5,
+            228,
+            12,
+            0,
+            196
+          ],
+          [
+            1,
+            2,
+            15,
+            22,
+            17,
+            296,
+            0,
+            206
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1853,
+            133,
+            259,
+            122,
+            230,
+            194,
+            0,
+            0
+          ]
+        ],
+        "normalized": [
+          [
+            0.5891,
+            0.0051,
+            0.0061,
+            0.0238,
+            0.0152,
+            0.0054,
+            0.0,
+            0.5239
+          ],
+          [
+            0.0007,
+            0.5944,
+            0.0073,
+            0.0017,
+            0.0512,
+            0.0036,
+            0.0,
+            0.0919
+          ],
+          [
+            0.0011,
+            0.0026,
+            0.5937,
+            0.0391,
+            0.0057,
+            0.0488,
+            0.0,
+            0.087
+          ],
+          [
+            0.0,
+            0.0051,
+            0.0547,
+            0.682,
+            0.0266,
+            0.0344,
+            0.0,
+            0.1007
+          ],
+          [
+            0.0,
+            0.0485,
+            0.0049,
+            0.0085,
+            0.4326,
+            0.0217,
+            0.0,
+            0.0958
+          ],
+          [
+            0.0002,
+            0.0051,
+            0.0182,
+            0.0374,
+            0.0323,
+            0.5353,
+            0.0,
+            0.1007
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.409,
+            0.3393,
+            0.3151,
+            0.2075,
+            0.4364,
+            0.3508,
+            0.0,
+            0.0
+          ]
+        ]
+      },
+      "consistency_check": {
+        "map50_ultralytics": 0.5897460850564428,
+        "map50_recomputed": 0.5897460850564428,
+        "map50_95_ultralytics": 0.3984261271528108,
+        "map50_95_recomputed": 0.3984261271528108,
+        "max_abs_diff": 0.0,
+        "tolerance": 0.0001,
+        "passed": true
+      },
+      "speed": {
+        "ms_per_img": 8.53,
+        "fps": 117.2,
+        "images": 100,
+        "warmup": 10,
+        "batch": 1,
+        "imgsz": 640,
+        "conf": 0.25,
+        "device": "Tesla T4"
+      },
+      "bootstrap": {
+        "map50_ci95": [
+          0.5504031705515399,
+          0.6351417183773648
+        ],
+        "map50_95_ci95": [
+          0.3671903975836299,
+          0.43939327889154123
+        ],
+        "map50_mean": 0.5938190060592177,
+        "map50_95_mean": 0.40274725965872477
+      }
+    }
+  },
+  "val_metrics": {
+    "G1A": {
+      "map50": 0.657,
+      "map50_95": 0.46189,
+      "precision": 0.76762,
+      "recall": 0.57034,
+      "source": "results/baseline.json"
+    },
+    "G1B": {
+      "map50": 0.64319,
+      "map50_95": 0.45765,
+      "precision": 0.75586,
+      "recall": 0.56347,
+      "source": "results/arm_b.json"
+    },
+    "G1C": {
+      "map50": 0.65679,
+      "map50_95": 0.4627,
+      "precision": 0.75616,
+      "recall": 0.57806,
+      "source": "results/arm_c.json"
+    },
+    "G2A": {
+      "map50": 0.45353,
+      "map50_95": 0.32028,
+      "precision": 0.56125,
+      "recall": 0.42581,
+      "source": "results/gen2/arm_a.json"
+    },
+    "G2B": {
+      "map50": 0.47341,
+      "map50_95": 0.33335,
+      "precision": 0.55891,
+      "recall": 0.45284,
+      "source": "results/gen2/arm_b.json"
+    },
+    "G2C": {
+      "map50": 0.46624,
+      "map50_95": 0.32819,
+      "precision": 0.55326,
+      "recall": 0.45145,
+      "source": "results/gen2/arm_c.json"
+    }
+  },
+  "pairwise": [
+    {
+      "pair": "G1B-G1A",
+      "a": "G1A",
+      "b": "G1B",
+      "map50": {
+        "observed_diff": -0.00331,
+        "mean_diff": -0.002881447213717311,
+        "ci95": [
+          -0.014867671991218839,
+          0.009826644058610497
+        ],
+        "p_gt_0": 0.324,
+        "significant": false
+      },
+      "map50_95": {
+        "observed_diff": 0.00058,
+        "mean_diff": 0.0008578576023213021,
+        "ci95": [
+          -0.007746734134680684,
+          0.010115520317627922
+        ],
+        "p_gt_0": 0.575,
+        "significant": false
+      },
+      "verdict": "Not significant: both 95% CIs contain 0, so this split cannot tell Gen 1 Random search and Gen 1 Defaults apart."
+    },
+    {
+      "pair": "G1C-G1A",
+      "a": "G1A",
+      "b": "G1C",
+      "map50": {
+        "observed_diff": -0.00698,
+        "mean_diff": -0.006823799704713365,
+        "ci95": [
+          -0.020774282309357836,
+          0.00730183687626642
+        ],
+        "p_gt_0": 0.166,
+        "significant": false
+      },
+      "map50_95": {
+        "observed_diff": -0.00252,
+        "mean_diff": -0.002539562135427995,
+        "ci95": [
+          -0.012528690681012783,
+          0.007070269248187779
+        ],
+        "p_gt_0": 0.315,
+        "significant": false
+      },
+      "verdict": "Not significant: both 95% CIs contain 0, so this split cannot tell Gen 1 PSO and Gen 1 Defaults apart."
+    },
+    {
+      "pair": "G2A-G1A",
+      "a": "G1A",
+      "b": "G2A",
+      "map50": {
+        "observed_diff": -0.10452,
+        "mean_diff": -0.10395906273644383,
+        "ci95": [
+          -0.12452331193469744,
+          -0.08432177356382793
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.08841,
+        "mean_diff": -0.08841368057533333,
+        "ci95": [
+          -0.10335670248401915,
+          -0.07464316540991882
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 Defaults is significantly better on mAP@50; Gen 1 Defaults is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2B-G1A",
+      "a": "G1A",
+      "b": "G2B",
+      "map50": {
+        "observed_diff": -0.08082,
+        "mean_diff": -0.08036437028088222,
+        "ci95": [
+          -0.09976813171091328,
+          -0.061770049793617395
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.0695,
+        "mean_diff": -0.06947500370117538,
+        "ci95": [
+          -0.08410580428113257,
+          -0.05621413069358741
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 Defaults is significantly better on mAP@50; Gen 1 Defaults is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2C-G1A",
+      "a": "G1A",
+      "b": "G2C",
+      "map50": {
+        "observed_diff": -0.08595,
+        "mean_diff": -0.08516336218170213,
+        "ci95": [
+          -0.10490158684923401,
+          -0.0664367482360875
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.0755,
+        "mean_diff": -0.0751709791420606,
+        "ci95": [
+          -0.08984675779194853,
+          -0.062186505244929025
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 Defaults is significantly better on mAP@50; Gen 1 Defaults is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G1C-G1B",
+      "a": "G1B",
+      "b": "G1C",
+      "map50": {
+        "observed_diff": -0.00367,
+        "mean_diff": -0.003942352490996054,
+        "ci95": [
+          -0.015709635543823892,
+          0.007910802059279378
+        ],
+        "p_gt_0": 0.277,
+        "significant": false
+      },
+      "map50_95": {
+        "observed_diff": -0.0031,
+        "mean_diff": -0.0033974197377492975,
+        "ci95": [
+          -0.01130787132618212,
+          0.004166831561753806
+        ],
+        "p_gt_0": 0.223,
+        "significant": false
+      },
+      "verdict": "Not significant: both 95% CIs contain 0, so this split cannot tell Gen 1 PSO and Gen 1 Random search apart."
+    },
+    {
+      "pair": "G2A-G1B",
+      "a": "G1B",
+      "b": "G2A",
+      "map50": {
+        "observed_diff": -0.10121,
+        "mean_diff": -0.10107761552272648,
+        "ci95": [
+          -0.12350759719833299,
+          -0.08022546271669179
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.08899,
+        "mean_diff": -0.08927153817765462,
+        "ci95": [
+          -0.10435589655445345,
+          -0.07559997415893853
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 Random search is significantly better on mAP@50; Gen 1 Random search is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2B-G1B",
+      "a": "G1B",
+      "b": "G2B",
+      "map50": {
+        "observed_diff": -0.07751,
+        "mean_diff": -0.07748292306716492,
+        "ci95": [
+          -0.10033349785886907,
+          -0.0556542069161153
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.07008,
+        "mean_diff": -0.07033286130349667,
+        "ci95": [
+          -0.08435739983359301,
+          -0.05645563333913244
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 Random search is significantly better on mAP@50; Gen 1 Random search is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2C-G1B",
+      "a": "G1B",
+      "b": "G2C",
+      "map50": {
+        "observed_diff": -0.08264,
+        "mean_diff": -0.08228191496798481,
+        "ci95": [
+          -0.10377284692869689,
+          -0.060904115967725894
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.07608,
+        "mean_diff": -0.0760288367443819,
+        "ci95": [
+          -0.0893859112253685,
+          -0.062200689999020765
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 Random search is significantly better on mAP@50; Gen 1 Random search is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2A-G1C",
+      "a": "G1C",
+      "b": "G2A",
+      "map50": {
+        "observed_diff": -0.09754,
+        "mean_diff": -0.09713526303173046,
+        "ci95": [
+          -0.1198517297249223,
+          -0.07442272248277121
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.08589,
+        "mean_diff": -0.08587411843990532,
+        "ci95": [
+          -0.10143528474143597,
+          -0.0705262188116039
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 PSO is significantly better on mAP@50; Gen 1 PSO is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2B-G1C",
+      "a": "G1C",
+      "b": "G2B",
+      "map50": {
+        "observed_diff": -0.07384,
+        "mean_diff": -0.07354057057616888,
+        "ci95": [
+          -0.09532099869140453,
+          -0.05000437827956886
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.06698,
+        "mean_diff": -0.06693544156574736,
+        "ci95": [
+          -0.08194498749862457,
+          -0.052361011882139194
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 PSO is significantly better on mAP@50; Gen 1 PSO is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2C-G1C",
+      "a": "G1C",
+      "b": "G2C",
+      "map50": {
+        "observed_diff": -0.07897,
+        "mean_diff": -0.07833956247698876,
+        "ci95": [
+          -0.10018476614503669,
+          -0.0569775674245939
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": -0.07298,
+        "mean_diff": -0.0726314170066326,
+        "ci95": [
+          -0.08836417574069624,
+          -0.05804273657006049
+        ],
+        "p_gt_0": 0.0,
+        "significant": true
+      },
+      "verdict": "Gen 1 PSO is significantly better on mAP@50; Gen 1 PSO is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2B-G2A",
+      "a": "G2A",
+      "b": "G2B",
+      "map50": {
+        "observed_diff": 0.0237,
+        "mean_diff": 0.02359469245556159,
+        "ci95": [
+          0.008559491203117752,
+          0.03779054156430232
+        ],
+        "p_gt_0": 0.998,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": 0.01891,
+        "mean_diff": 0.018938676874157945,
+        "ci95": [
+          0.008460838087749929,
+          0.028514695211281724
+        ],
+        "p_gt_0": 1.0,
+        "significant": true
+      },
+      "verdict": "Gen 2 Random search is significantly better on mAP@50; Gen 2 Random search is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2C-G2A",
+      "a": "G2A",
+      "b": "G2C",
+      "map50": {
+        "observed_diff": 0.01857,
+        "mean_diff": 0.0187957005547417,
+        "ci95": [
+          0.004961365777311155,
+          0.03290376833827162
+        ],
+        "p_gt_0": 0.997,
+        "significant": true
+      },
+      "map50_95": {
+        "observed_diff": 0.01291,
+        "mean_diff": 0.013242701433272714,
+        "ci95": [
+          0.0039729208510407,
+          0.02312743490254095
+        ],
+        "p_gt_0": 0.998,
+        "significant": true
+      },
+      "verdict": "Gen 2 PSO is significantly better on mAP@50; Gen 2 PSO is significantly better on mAP@50-95."
+    },
+    {
+      "pair": "G2C-G2B",
+      "a": "G2B",
+      "b": "G2C",
+      "map50": {
+        "observed_diff": -0.00513,
+        "mean_diff": -0.004798991900819887,
+        "ci95": [
+          -0.018431390223929634,
+          0.008881610574716092
+        ],
+        "p_gt_0": 0.246,
+        "significant": false
+      },
+      "map50_95": {
+        "observed_diff": -0.006,
+        "mean_diff": -0.00569597544088523,
+        "ci95": [
+          -0.014806529519659353,
+          0.0032836104588722702
+        ],
+        "p_gt_0": 0.119,
+        "significant": false
+      },
+      "verdict": "Not significant: both 95% CIs contain 0, so this split cannot tell Gen 2 PSO and Gen 2 Random search apart."
+    }
+  ],
+  "ultralytics": "8.4.169",
+  "device": "Tesla T4",
+  "processor": "x86_64",
+  "seconds": 118.8,
+  "timings": {
+    "checks": 0.2,
+    "validation": {
+      "G1A": 14.9,
+      "G1B": 11.9,
+      "G1C": 12.0,
+      "G2A": 15.3,
+      "G2B": 15.1,
+      "G2C": 15.0
+    },
+    "latency": 6.7,
+    "bootstrap": 23.2,
+    "figures": 2.3,
+    "sample_grid": 2.3
+  },
+  "finished_at": "2026-10-11T04:53:55+00:00",
+  "tag": "g1g2_studio",
+  "arms": "configs/gen2/arms_gen1_vs_gen2.yaml"
+}
