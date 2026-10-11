@@ -47,6 +47,7 @@ Status: **verified** = full text read and the notes checked · **unverified** = 
 2. **Metaheuristic tuning for waste detection.** Paper 2 tunes CNNs with PSO in medical imaging, and paper 4 uses a swarm metaheuristic for waste classification. SwarmSort brings PSO tuning to waste object detection.
 3. **A fair, tested comparison.** SwarmSort compares PSO with random search and the defaults at an *equal budget*, on a test split used once, with paired-bootstrap confidence intervals. Check whether papers 2 and 4 include a random-search baseline or a significance test.
 4. **Real-world scenes.** Gen 2 trains on and evaluates real street, park and beach photos (TACO, HITL), plus a separate India test set (DWSD), and reports studio vs real-world accuracy separately. The base paper also targets natural scenes; compare its setup.
+   Evidence (g2_7, 2026-10-11): on the same 468 real-world test images and six shared classes, the Gen 2 models score 0.338–0.353 mAP@50 against 0.038–0.096 for the studio-trained Gen 1 models, at a cost of about 0.07–0.10 on studio photos (see EVOLUTION.md).
 5. **Honest negative results.** In Gen 1 the arms tied. Reporting this, with the proxy-gap lesson, is itself a contribution that few tuning papers show.
 
 ## To do before writing the paper

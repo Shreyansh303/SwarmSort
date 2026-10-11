@@ -9,7 +9,7 @@ The full write-up of the finished work is in the [README](../README.md). Ideas t
 | Gen | Dates | Data | Model | Method | Headline result | Status |
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-30 to 2026-10-05 | Kaggle garbage-detection: 10,464 images, 6 classes, mostly single objects on clean backgrounds | YOLOv8n, imgsz 416 | Three arms at equal budget: A defaults, B random search, C PSO | Test mAP@50 A 0.676, B 0.672, C 0.668: a statistical tie | Finished |
-| 2 | 2026-10-07 to 2026-10-10 | Part of the Gen 1 data plus real-world litter photos (TACO, HITL Recycling); DWSD (Kolkata streets) as a held-out India test set; 7 classes (OTHER added) | YOLOv8n, imgsz 640 | The same three arms, rerun on the merged data | Test mAP@50 (all) A 0.479, B 0.497, C 0.500: both searches significantly beat the defaults, PSO and random search tie. Real-world about 0.30 (no significant differences); India about 0.02–0.03 (fails). Not comparable with Gen 1's 0.676 | Finished (evaluation done 2026-10-10); open items in its Status |
+| 2 | 2026-10-07 to 2026-10-10 | Part of the Gen 1 data plus real-world litter photos (TACO, HITL Recycling); DWSD (Kolkata streets) as a held-out India test set; 7 classes (OTHER added) | YOLOv8n, imgsz 640 | The same three arms, rerun on the merged data | Test mAP@50 (all) A 0.479, B 0.497, C 0.500: both searches significantly beat the defaults, PSO and random search tie. Real-world about 0.30 (no significant differences); India about 0.02–0.03 (fails). Gen 1 vs Gen 2 on the same images (6 shared classes): on real-world photos Gen 2 0.338–0.353 against Gen 1 0.038–0.096 (every Gen 2 arm significantly better); on studio photos Gen 2 0.571–0.595 against Gen 1 0.669–0.676 (every Gen 1 arm significantly better) | Finished (evaluation done 2026-10-10, Gen 1 vs Gen 2 comparison done 2026-10-11); open items in its Status |
 
 ## How to update this document
 
@@ -247,6 +247,8 @@ Speed: 8.0–8.8 ms per image (batch 1, imgsz 640, Tesla T4) for every arm on ev
 
 **Can Gen 2 be compared with Gen 1?** Not yet. Gen 1's test score (0.676 mAP@50) and Gen 2's studio score (0.571–0.595) use the same 1,046 images, but the models differ in three ways: 6 classes against 7, imgsz 416 against 640, and Gen 2 trained on only 3,000 of Gen 1's 7,324 train images (plus 3,292 real-world train images). So the lower Gen 2 studio score does not show that Gen 2 got worse. The question Gen 2 was started for, "do the Gen 2 models work better on real-world photos than the Gen 1 models?", is **not measured yet**: that needs the Gen 1 models scored on the Gen 2 real_world test set, on the six shared classes.
 
+*Note (2026-10-11):* this is now measured; see "Gen 1 vs Gen 2 on the same images" at the end of these Results. On real-world photos Gen 2 is much better than Gen 1. On studio photos the deployed Gen 2 models are significantly worse than the Gen 1 models, by about 0.07–0.10 mAP@50. The differences listed above (plus a different training val set) are the likely reasons, but that run does not separate them.
+
 **Earlier results on the Gen 2 val split** (recorded before the test evaluation). The val split mixes studio and real-world images. These val numbers are **not comparable with Gen 1's val mAP@50 of 0.657**: the val set, the classes (7 instead of 6) and the image size all changed.
 
 - **Dataset** (`results/gen2/build_report.json`): 6,292 train, 1,841 val and 1,514 test images (1,046 studio, 468 real_world test images), 7 classes, built without DWSD (see Problems below). The India test set (DWSD, 700 images in the local build) is built separately at evaluation time.
@@ -274,6 +276,67 @@ Both tuned arms are ahead of the defaults on val (B +0.020, C +0.013 mAP@50), un
 
 *Note (2026-10-11):* the test evaluation above confirmed the gap on the all and studio splits (both tuned arms significantly better than the defaults), but not on real_world. On val, random search was ahead of PSO (0.4734 against 0.4662); on test the two tie.
 
+#### Gen 1 vs Gen 2 on the same images
+
+**Source:** `g2_7_gen1_vs_gen2`, Kaggle version 357237127, 2026-10-11. Files: `results/gen2/test_g1g2_{real_world,studio}_results.json` and the matching `_comparison.md`. Nothing was trained or tuned on these numbers.
+
+**How it was made fair.** All six final models (Gen 1 A, B, C and Gen 2 A, B, C) were scored on the same test images. The labels were restricted to the 6 shared classes: OTHER label lines were removed (images that had only OTHER stay in, with no objects, for every model), and Gen 2's OTHER predictions were dropped with Ultralytics' classes filter. Each model ran at its own training image size, i.e. as deployed: Gen 1 at 416 px, Gen 2 at 640 px. Other settings as in `g2_6_evaluate` (conf 0.001, 1,000 paired bootstrap resamples, seed 0, Tesla T4).
+
+- **real_world:** 468 images (TACO + HITL), 647 boxes of the six classes (the 779 boxes minus the 132 OTHER boxes). Gen 1 never saw these sources in training. Still only **1** BIODEGRADABLE box.
+- **studio:** 1,046 images, 7,413 boxes: Gen 1's own test split, which neither generation trained on. It has no OTHER boxes, so nothing was removed.
+
+**real_world**, test mAP@50 and mAP@50-95 [95% CI]:
+
+| Arm | mAP@50 | mAP@50-95 |
+|---|---|---|
+| Gen 1 A: Defaults (416 px) | 0.047 [0.038, 0.080] | 0.036 [0.029, 0.063] |
+| Gen 1 B: Random search (416 px) | 0.038 [0.031, 0.069] | 0.029 [0.024, 0.053] |
+| Gen 1 C: PSO (416 px) | 0.096 [0.041, 0.214] | 0.069 [0.031, 0.153] |
+| Gen 2 A: Defaults (640 px) | 0.353 [0.315, 0.504] | 0.290 [0.258, 0.428] |
+| Gen 2 B: Random search (640 px) | 0.338 [0.304, 0.473] | 0.272 [0.243, 0.389] |
+| Gen 2 C: PSO (640 px) | 0.352 [0.315, 0.485] | 0.282 [0.251, 0.392] |
+
+**studio**, test mAP@50 and mAP@50-95 [95% CI]:
+
+| Arm | mAP@50 | mAP@50-95 |
+|---|---|---|
+| Gen 1 A: Defaults (416 px) | 0.676 [0.641, 0.719] | 0.474 [0.442, 0.514] |
+| Gen 1 B: Random search (416 px) | 0.672 [0.636, 0.716] | 0.475 [0.443, 0.516] |
+| Gen 1 C: PSO (416 px) | 0.669 [0.628, 0.716] | 0.471 [0.438, 0.513] |
+| Gen 2 A: Defaults (640 px) | 0.571 [0.529, 0.619] | 0.386 [0.356, 0.425] |
+| Gen 2 B: Random search (640 px) | 0.595 [0.557, 0.639] | 0.404 [0.374, 0.442] |
+| Gen 2 C: PSO (640 px) | 0.590 [0.550, 0.635] | 0.398 [0.367, 0.439] |
+
+Gen 2 arm − Gen 1 arm, Δ test mAP@50 [95% CI from the paired bootstrap]. All 18 differences are significant, on mAP@50 and on mAP@50-95.
+
+| Split | Gen 2 arm | − Gen 1 A | − Gen 1 B | − Gen 1 C |
+|---|---|---|---|---|
+| real_world | A | +0.305 [+0.266, +0.453] | +0.315 [+0.277, +0.461] | +0.257 [+0.160, +0.397] |
+| real_world | B | +0.291 [+0.257, +0.407] | +0.301 [+0.265, +0.419] | +0.243 [+0.134, +0.418] |
+| real_world | C | +0.305 [+0.267, +0.419] | +0.314 [+0.276, +0.431] | +0.256 [+0.142, +0.424] |
+| studio | A | −0.105 [−0.125, −0.084] | −0.101 [−0.124, −0.080] | −0.098 [−0.120, −0.074] |
+| studio | B | −0.081 [−0.100, −0.062] | −0.078 [−0.100, −0.056] | −0.074 [−0.095, −0.050] |
+| studio | C | −0.086 [−0.105, −0.066] | −0.083 [−0.104, −0.061] | −0.079 [−0.100, −0.057] |
+
+Within each generation:
+
+- **real_world:** no difference inside Gen 1 or inside Gen 2 is significant.
+- **studio:** inside Gen 1 no difference is significant (as in Gen 1's own test). Inside Gen 2, B and C are significantly better than A (+0.024 [+0.009, +0.038] and +0.019 [+0.005, +0.033]), and C vs B is a tie (−0.005 [−0.018, +0.009]), the same as in `g2_6`.
+
+**Verdict.** Gen 2 made the detector usable on real-world photos: on this set its mAP@50 is about 4 to 9 times Gen 1's (A 0.047 → 0.353, B 0.038 → 0.338, C 0.096 → 0.352), and every Gen 2 arm beats every Gen 1 arm. The price is studio accuracy: on clean studio photos every Gen 1 arm beats every Gen 2 arm, by about 0.07–0.10 mAP@50 (−0.074 to −0.105). The same picture holds per class. On the five real_world classes with more than one box, every Gen 2 arm scores 0.239–0.618 AP@50 and every Gen 1 arm 0.008–0.117. On studio, every Gen 1 arm is ahead of every Gen 2 arm on all six classes; the gap is smallest on BIODEGRADABLE (0.003–0.031) and largest on PAPER (0.118–0.150).
+
+**Likely causes of the studio drop** (likely, not proven: this run does not separate them):
+
+- Gen 2 trained on only 3,000 of Gen 1's 7,324 studio train images (41%);
+- the same small model (YOLOv8n) now shares its capacity with real-world scenes and a 7th class (OTHER);
+- a different training val set (Gen 2's mixes studio and real-world images, and `best.pt` is picked on it) and a different image size (640 against 416).
+
+**Caveats.**
+
+- **Wide, lopsided real_world intervals.** BIODEGRADABLE has a single box in this split, so a resample that drops or repeats that one image swings that class's AP, which is one sixth of the mean. Gen 1 C's 0.096 [0.041, 0.214] comes largely from that one box: its BIODEGRADABLE AP is 0.332, against 0.003 (Gen 1 A) and 0.009 (Gen 1 B). On the other five classes Gen 1 C averages 0.048, close to A (0.056) and B (0.043). Even so, every Gen 2 − Gen 1 C interval stays well above 0 (lowest bound +0.134).
+- **Gen 2's real_world numbers are higher here than in `g2_6`** (A 0.353 against 0.310) only because the weak OTHER class is left out of the mean. Gen 2's studio numbers are the same as in `g2_6`, since studio has no OTHER boxes.
+- **Gen 1's studio result reproduces.** Gen 1 A, B and C score 0.676, 0.672 and 0.669 here against the committed 0.676, 0.672 and 0.668 (`results/test_results.json`). The unrounded differences are at most 0.0004 (C: 0.66872 against 0.66835). The class filter cannot cause this: Gen 1 models only have these six classes, so it removes nothing. The likely causes are that the Gen 2 build of these images has 2 fewer BIODEGRADABLE boxes (4,531 against 4,533) and that this run used a Tesla T4 GPU, while the committed run used a laptop CPU.
+
 ### Problems and fixes
 
 | Problem | Symptom | Cause | Fix |
@@ -299,23 +362,26 @@ Both tuned arms are ahead of the defaults on val (B +0.020, C +0.013 mAP@50), un
 - **Data first, again.** A domain with no training data fails almost completely (India about 0.02–0.03 mAP@50), whatever the tuning.
 - **A test set must be labelled like the training data.** DWSD's merged, mask-derived boxes punish correct per-item detections, so its score measures the labelling difference as well as the model.
 - **A narrow catch-all class does not learn well.** OTHER (cigarettes, mixed bags, textile, hazardous items) stays at AP@50 0.050–0.063.
+- **Real-world data fixed real-world photos, at a cost on studio photos.** On the same images and the six shared classes, Gen 2 scores about 4 to 9 times Gen 1's mAP@50 on real-world photos (0.338–0.353 against 0.038–0.096), but about 0.07–0.10 lower on clean studio photos. A small model trained on less of the studio data, with more to learn, traded some of one domain for the other. And comparing generations needs the same images and classes for every model; the separate test tables could not answer it.
 - **Engineering:** long cloud runs need freeze protection (local data copy, watchdog, resume), and the evaluation code needs a speed test on a full-sized set before the one-time test run.
 
 ### What triggers Generation 3
 
-Gen 2 showed that tuning gives a small, real gain on mixed data, but it left the main goal (better accuracy on real Indian waste photos) open:
+Gen 2 showed that tuning gives a small, real gain on mixed data, and that real-world training data makes the detector usable on real-world photos (about 4 to 9 times Gen 1's mAP@50 there), at a cost of about 0.07–0.10 mAP@50 on studio photos. It left the main goal (better accuracy on real Indian waste photos) open:
 
 1. **India fails.** The models have never seen Indian scenes. Gen 3 needs Indian-domain training data: for example part of DWSD for training (keeping a held-out part for test, ideally with per-item boxes), or other Indian datasets.
-2. **The Gen 1 vs Gen 2 real-world comparison is missing.** Score the three Gen 1 models on the Gen 2 real_world test set, on the six shared classes. Until then, it is not known whether Gen 2 improved real-world accuracy over Gen 1. This needs no training and should come first.
+2. **Studio accuracy dropped.** Every Gen 2 arm is significantly worse than every Gen 1 arm on studio photos (about 0.07–0.10 mAP@50). Options: use all of Gen 1's studio images (or rebalance the domains), and/or a larger model ([FUTURE_WORK](FUTURE_WORK.md) items 2.8 and 3.1).
 3. **The OTHER class is very weak** (AP@50 0.050–0.063). Options: more OTHER data, splitting it into clearer classes, or merging its items into existing classes.
 4. **Maybe a larger model** (for example YOLOv8s), and several seeds per arm so PSO and random search can be told apart ([FUTURE_WORK](FUTURE_WORK.md) items 3.1 and 4.1).
 
+*Note (2026-10-11):* item 2 of this list used to be "the Gen 1 vs Gen 2 real-world comparison is missing". That comparison was done in `g2_7_gen1_vs_gen2` (see Results), so it is replaced by the studio drop it revealed.
+
 ### Status
 
-Finished (evaluation done 2026-10-10).
+Finished (evaluation done 2026-10-10; Gen 1 vs Gen 2 comparison done 2026-10-11).
 
 - Done: dataset survey and build, both searches, full training of all three arms, and the one-time test evaluation on all, studio, real_world and india (`g2_6_evaluate`, Kaggle version 357148735, about 7 minutes). The two runs that froze on 2026-10-08 were resumed after the fix: the random search continued from 11 of 32 evaluations, Arm C from epoch 55.
+- Done (2026-10-11): the Gen 1 vs Gen 2 comparison on the same real_world and studio test images, on the six shared classes (`g2_7_gen1_vs_gen2`, Kaggle version 357237127). Gen 2 is much better on real-world photos and somewhat worse on studio photos (see Results).
 - Open items:
   - update the demo app with the Gen 2 models (plan step 7);
-  - score the Gen 1 models on the Gen 2 real_world test set (six shared classes);
-  - Indian-domain training data and the weak OTHER class, which move to Gen 3.
+  - Indian-domain training data, the weak OTHER class and the studio accuracy drop, which move to Gen 3.

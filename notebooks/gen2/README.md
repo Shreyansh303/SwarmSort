@@ -52,7 +52,7 @@ What happened when the notebooks were run (dates in UTC, from the `finished_at` 
 | `g2_4_arm_b` | Done in one run (2026-10-09) | `arm_b.json`: val mAP@50 0.4734, 2.07 h |
 | `g2_5_arm_c` | Froze on 2026-10-08 after 55 of 100 epochs. A new version salvaged the run folder, resumed from epoch 55 (`"resumed_from_epoch": 55`) and finished on 2026-10-09 | `arm_c.json`: val mAP@50 0.4662, 1.60 h of training in total |
 | `g2_6_evaluate` | The first version ran 3.6 h without finishing and was cancelled (slow bootstrap). After the fix (commit c1a18c8), Kaggle version 357148735 finished on 2026-10-10 in about 7 minutes, including the separate DWSD-only build for india | `test_{all,studio,real_world,india}_results.json`, `test_domains.md`: test mAP@50 on all A 0.479, B 0.497, C 0.500; studio 0.571 / 0.595 / 0.590; real_world 0.310 / 0.298 / 0.310; india 0.027 / 0.023 / 0.027 |
-| `g2_7_gen1_vs_gen2` | Not run yet | `test_g1g2_real_world_*`, `test_g1g2_studio_*`, `test_g1g2_summary.md` |
+| `g2_7_gen1_vs_gen2` | The first attempt failed with a Kaggle dataset-mount error. The retry, Kaggle version 357237127, finished on 2026-10-11 | `test_g1g2_{real_world,studio}_results.json` and `_comparison.md` (6 shared classes): real_world test mAP@50 Gen 1 A/B/C 0.047 / 0.038 / 0.096, Gen 2 0.353 / 0.338 / 0.352; studio Gen 1 0.676 / 0.672 / 0.669, Gen 2 0.571 / 0.595 / 0.590. Every Gen 2 arm is significantly better on real_world, every Gen 1 arm on studio |
 
 The two freezes cost about 24 GPU hours; see "Freeze protection" below. The partial outputs of the frozen versions are kept in `results/gen2/salvage/`.
 

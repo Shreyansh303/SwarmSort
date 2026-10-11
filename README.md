@@ -486,7 +486,17 @@ Test mAP@50 [95% CI], test split used once:
 
 **Verdict.** Unlike Gen 1, tuning now helps: on the all and studio splits, both random search and PSO are significantly better than the defaults (about +0.02 mAP@50, paired bootstrap), but PSO and random search are again a statistical tie. On real-world photos no difference is significant, and on the Indian DWSD photos all three models fail (about 0.02–0.03), mainly because there was no Indian training data and DWSD's mask-derived boxes merge touching items.
 
-These numbers cannot be compared with Gen 1's 0.676: the studio images are the same, but Gen 2 uses 7 classes instead of 6, 640 px instead of 416 and only 3,000 of the 7,324 Gen 1 training images. Whether Gen 2 beats Gen 1 on real-world photos is not measured yet (next step: score the Gen 1 models on the Gen 2 real_world test set).
+These numbers cannot be compared directly with Gen 1's 0.676: the studio images are the same, but Gen 2 uses 7 classes instead of 6, 640 px instead of 416 and only 3,000 of the 7,324 Gen 1 training images. So all six models were also scored on the same images with the 6 shared classes (below).
+
+**Did Gen 2 fix real-world photos?** Test mAP@50 [95% CI] on the same images, 6 shared classes (OTHER removed), each model at its own training size (Gen 1 416 px, Gen 2 640 px):
+
+| Arm | real_world (468 images), Gen 1 | real_world, Gen 2 | studio (1,046 images), Gen 1 | studio, Gen 2 |
+|---|---|---|---|---|
+| A: Defaults | 0.047 [0.038, 0.080] | 0.353 [0.315, 0.504] | 0.676 [0.641, 0.719] | 0.571 [0.529, 0.619] |
+| B: Random search | 0.038 [0.031, 0.069] | 0.338 [0.304, 0.473] | 0.672 [0.636, 0.716] | 0.595 [0.557, 0.639] |
+| C: PSO | 0.096 [0.041, 0.214] | 0.352 [0.315, 0.485] | 0.669 [0.628, 0.716] | 0.590 [0.550, 0.635] |
+
+Yes: on real-world photos every Gen 2 arm is significantly better than every Gen 1 arm, about 4 to 9 times higher (the real-world intervals are wide because BIODEGRADABLE has only one box there). The cost is about 0.07–0.10 mAP@50 on clean studio photos, where every Gen 1 arm is significantly better, likely (not proven) because Gen 2 trained on only 41% of the studio images and shares a small model with real-world data and a 7th class.
 
 Full history, problems and decisions: [docs/EVOLUTION.md](docs/EVOLUTION.md). How to run it on Kaggle: [notebooks/gen2/README.md](notebooks/gen2/README.md).
 
