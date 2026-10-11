@@ -1,2 +1,60 @@
 \section{Future Work: Possible Improvements}
 \label{sec:future}
+
+Each improvement below answers a limitation of Section~\ref{subsec:limitations} or a measured result. Table~\ref{tab:roadmap} orders them by expected value for effort.
+
+\subsection{The Optimization Study}
+\label{subsec:fw-opt}
+
+First, three training seeds per arm would let the intervals cover training noise as well as test sampling, and several search seeds per method would show whether PSO's result is repeatable. Second, the small proxy gaps between the top settings vanished after full training, which calls for multi-fidelity search such as successive halving or Hyperband~\cite{li2018hyperband}, so that the best candidates are promoted to longer runs before a winner is chosen. Third, the swarm converged early and in \gentwo never improved after round~1. PSO variants could keep it exploring for longer: the constriction factor of Clerc and Kennedy~\cite{clerc2002particle}, a ring topology, adaptive inertia, or more particles and rounds.
+
+Fourth, other optimizers should run as further arms against the same defaults and random-search baselines at the same 32 evaluations: a genetic or evolutionary algorithm~\cite{young2015optimizing}, differential evolution~\cite{storn1997differential}, and Bayesian optimization, for example with the tree-structured Parzen estimator in Optuna~\cite{akiba2019optuna}. This also answers why we chose PSO rather than, for instance, the beluga whale optimizer of Sayed et al.~\cite{sayed2024intelligent}: the protocol does not depend on the optimizer, and its value is that every candidate meets the same baselines. Fifth, a wider search space, adding color augmentation, translation, loss gains and image size, would test whether the six searched settings simply left too little room to beat the defaults. Sixth, a domain-aware fitness, scored on real-world validation images, targets the finding that tuning gains on the studio and mixed test sets did not reach real-world photographs. Finally, the proxy check should be repeated for \gentwo against a 100-epoch reference, including a proxy run of the defaults that tests the hypothesis of Section~\ref{subsec:why}, and the statistics should be strengthened with Holm's correction for multiple comparisons, intervals for per-class AP and stored bootstrap resamples.
+
+\subsection{Data and the Indian Domain}
+\label{subsec:fw-data}
+
+The main next step is Indian training data with per-item boxes: part of DWSD, or a new Indian collection, labeled item by item, with a held-out part kept for testing. This addresses the failure on DWSD (0.023--0.027 \mapfifty) and the labeling mismatch behind part of it. The OTHER class also needs work (AP@50 0.050--0.063 for every arm): more examples, a split into clearer classes, or a merge into existing ones. Clutter augmentations such as copy-paste~\cite{ghiasi2021simple}, smaller object scales, blur and lighting changes target the small, overlapping and partly hidden items of real-world photographs, where every arm loses about half of its studio score. Finally, the classes could follow the three streams into which the SWM Rules 2016 require waste to be segregated, bio-degradable, non-bio-degradable and domestic hazardous~\cite{moefcc2016solid}, so that each detection maps directly to a bin.
+
+\subsection{The Model}
+\label{subsec:fw-model}
+
+Larger or newer detectors, such as YOLOv8s, YOLOv8m or YOLO11~\cite{jocher2024yolo11}, trained with the same settings, would show how much of the real-world gap is due to model capacity, at a cost in speed on edge devices. Sliced inference~\cite{akyon2022slicing}, which runs the detector on overlapping tiles, suits wide photographs with many small items. Confidence calibration, for example temperature scaling~\cite{guo2017calibration}, would make a score of 0.5 mean roughly 50\% correct, which matters when a bin acts on a threshold.
+
+\subsection{Combining the Three Models}
+\label{subsec:fw-ensemble}
+
+The three arms were trained with different hyperparameters, and no arm leads on every \gentwo test set: on point estimates, PSO is highest on the whole split, random search on the studio set, and the defaults and PSO tie on the real-world and Indian sets (Table~\ref{tab:gen2-test}). On the real-world set, where the three \mapfifty values lie within 0.012 of each other, the arms differ more in their parts: precision at the maximum-F1 confidence ranges from 0.366 (B) to 0.556 (C), AP@50 on PAPER from 0.239 (A) to 0.330 (C), and on GLASS random search leads (0.296). These per-class values have no intervals, and we did not measure how often the models agree, but they suggest that the arms make partly different mistakes. Combining them could then beat each one alone, and the three-model version needs no extra training.
+
+Three combinations should be compared. Box fusion pools the boxes of A, B and C and merges overlapping ones, with weighted boxes fusion~\cite{solovyev2021weighted} or non-maximum suppression. Majority voting keeps a box only if at least two of the three models find it (IoU $\ge 0.5$), which should raise precision; a box found by only one model can be flagged as uncertain instead of being discarded. Weighted voting weights each model by its own validation \mapfifty (0.454, 0.473 and 0.466 in \gentwo), never by test scores, which would leak the test split into the method. A soft-computing extension goes further. A search produces a population of good settings, the final swarm and the best random samples, not just one winner; training the top-$k$ of them and combining the models uses the swarm as an ensemble generator. Because the swarm converged, its final members may lack diversity, so the top random samples should be mixed in. Every ensemble should be evaluated with the same paired bootstrap against the best single arm, chosen on validation, on every test set. Its cost is inference time: three models take about three times as long, roughly 100~ms per image on the laptop CPU, where one \genone model took 31 to 38~ms.
+
+\subsection{Deployment}
+\label{subsec:fw-deploy}
+
+Per-class confidence thresholds, chosen on validation data, could replace the single threshold, since precision on real-world photographs is low (0.366 to 0.556) and the classes differ widely in AP. The models should be exported to ONNX or TFLite and timed on a Raspberry Pi, the class of hardware that Alshammari et al.~\cite{alshammari2025smart} use for a smart-bin classifier, because our latencies come only from a laptop CPU and a cloud GPU. Since real sorting is continuous, the detector should also be tested on live video.
+
+\begin{table}[!t]
+\centering
+\caption{Future-Work Roadmap, Ordered by Expected Value for Effort}
+\label{tab:roadmap}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{@{}c>{\raggedright\arraybackslash}p{2.75cm}>{\raggedright\arraybackslash}p{3.05cm}>{\raggedright\arraybackslash}p{1.45cm}@{}}
+\toprule
+Priority & Improvement & Addresses & Effort \\
+\midrule
+1 & Indian training data with per-item boxes & DWSD failure (0.023--0.027 \mapfifty) & Large \\
+2 & Ensemble of A, B and C (fusion or voting) & Arms differ per class and test set; no arm wins everywhere & Small (no training) \\
+3 & Three training seeds per arm, several search seeds & Tuning effect vs.\ training noise & Medium \\
+4 & Domain-aware fitness (real-world validation) & Tuning gains did not carry to real-world photos & Medium \\
+5 & Multi-fidelity search (Hyperband) & Proxy gaps vanish at 100 epochs & Medium \\
+6 & GA, DE and Bayesian optimization at the same budget & ``Why PSO?'' & Medium \\
+7 & Fix the OTHER class & AP@50 0.050--0.063 & Medium \\
+8 & Larger detector; sliced inference & Small items, look-alike materials & Medium \\
+9 & Edge export and latency on a Raspberry Pi & Real smart-bin hardware & Medium \\
+10 & Swarm as an ensemble generator (top-$k$ settings) & Uses the whole PSO population & Medium \\
+\bottomrule
+\end{tabular}
+\\[2pt]
+\parbox{\columnwidth}{\footnotesize Effort: Small = hours, no GPU training; Medium = about a day with some GPU time; Large = several days or a new data pipeline. GA = genetic algorithm; DE = differential evolution.}
+\end{table}
