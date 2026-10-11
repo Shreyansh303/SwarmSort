@@ -37,9 +37,12 @@ unzipped into paper/figures/data/realworld/ (--realworld) it holds the selected 
 selection.json. When that folder exists (and --no-realworld is not given):
   r_samples.jpg  gets a "Real-world" row between Studio (and any --add-domain rows) and India: selection A of the
                  bundle, chosen on Kaggle by this script's own choose() rule over all 468 real-world test images.
-  r_best.jpg     (--best-out) is drawn too: the same columns, one row per best-case image (selection B of the bundle;
-                 a deliberately favorable, rule-based choice; the rule, the level used and every model's totals are
-                 in selection.json and printed here for the caption).
+  r_best.jpg     (--best-out) is drawn too: the same columns, one row per best-case image. First selection B of the
+                 bundle (multi-object best cases), then selection C (single-object images that all three models get
+                 fully correct); both are deliberately favorable, rule-based choices, and each row is marked on the
+                 left with its number of objects. The rules, the level used, every model's totals and the fully
+                 correct counts by objects per image are in selection.json and printed here for the caption. A
+                 bundle without selection C (exported before it was added) gives selection B alone, as before.
 Bundle rows draw the boxes recorded on Kaggle, the ones the selection was scored on. The models are also run here on
 the bundle images and any difference from the recorded boxes is printed. Without the folder the output is the
 figure of the paper as before.
@@ -213,6 +216,13 @@ def print_bundle_totals(bundle):
           + ", ".join(f"{arm} fully correct {t['per_model'][arm]['fully_correct']}, mean F1 "
                       f"{t['per_model'][arm]['mean_f1']:.3f}" for arm, _ in ARMS)
           + f"; all three {t['fully_correct_all_three']}")
+    for k, g in t.get("fully_correct_by_objects", {}).items():
+        print(f"    {k} object(s) per image: {g['images']} images; fully correct "
+              + ", ".join(f"{arm} {g[arm]}" for arm, _ in ARMS) + f", all three {g['all_three']}")
+
+
+def object_label(n):
+    return "1 object" if n == 1 else f"{n} objects"
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -288,8 +298,9 @@ def draw_panel(ax, arr, frame, boxes, count_text):
     place_labels(ax, [l[1:] for l in labels], [tag_extent(count, ax.figure.canvas.get_renderer())])
 
 
-def make_figure(rows, out_path):
-    """rows: [(domain, image path, gt boxes, {arm: boxes})]."""
+def make_figure(rows, out_path, row_labels=None):
+    """rows: [(domain, image path, gt boxes, {arm: boxes})]. The left margin names each domain once, centered on its
+    rows; with row_labels (one text per row) it names every row instead (a wider gap still separates domains)."""
     n_rows, n_cols = len(rows), 1 + len(ARMS)
     left, right, top, bottom = 0.30, 0.03, 0.20, 0.30  # inches
     gap, domain_gap = 0.04, 0.10
@@ -299,7 +310,7 @@ def make_figure(rows, out_path):
     fig = plt.figure(figsize=(PAGE_W, height), dpi=300)  # label overlap is measured at the saved resolution
     headers = ["Ground truth"] + [label for _, label in ARMS]
     y = height - top
-    spans = {}
+    spans, centers = {}, []
     for r, (domain, path, gt, preds) in enumerate(rows):
         if r and domain != rows[r - 1][0]:
             y -= domain_gap - gap
@@ -310,7 +321,7 @@ def make_figure(rows, out_path):
             x = left + c * (panel + gap)
             ax = fig.add_axes([x / PAGE_W, y / height, panel / PAGE_W, panel / height])
             if c == 0:
-                draw_panel(ax, arr, frame, [(*b, None) for b in gt], f"{len(gt)} boxes")
+                draw_panel(ax, arr, frame, [(*b, None) for b in gt], "1 box" if len(gt) == 1 else f"{len(gt)} boxes")
             else:
                 boxes = preds[ARMS[c - 1][0]]
                 draw_panel(ax, arr, frame, boxes, f"{len(boxes)} det.")
@@ -318,10 +329,16 @@ def make_figure(rows, out_path):
                 ax.set_title(headers[c], fontsize=8, color=INK, pad=3)
         lo, hi = spans.get(domain, (y, y + panel))
         spans[domain] = (min(lo, y), max(hi, y + panel))
+        centers.append(y + panel / 2)
         y -= gap
-    for domain, (lo, hi) in spans.items():
-        fig.text((left - 0.12) / PAGE_W, (lo + hi) / 2 / height, domain, rotation=90, ha="center", va="center",
-                 fontsize=8, color=INK)
+    if row_labels is None:
+        for domain, (lo, hi) in spans.items():
+            fig.text((left - 0.12) / PAGE_W, (lo + hi) / 2 / height, domain, rotation=90, ha="center", va="center",
+                     fontsize=8, color=INK)
+    else:
+        for text, yc in zip(row_labels, centers, strict=True):
+            fig.text((left - 0.12) / PAGE_W, yc / height, text, rotation=90, ha="center", va="center", fontsize=8,
+                     color=INK)
     handles = [Patch(facecolor="none", edgecolor=col, linewidth=1.2, label=f"{full} ({short})" if short != full
                      else full) for full, short, col in zip(CLASSES, SHORT, CLASS_COLOR)]
     fig.legend(handles=handles, loc="lower center", ncol=len(CLASSES), frameon=False, fontsize=6.5,
@@ -393,9 +410,19 @@ def main(argv=None):
         print(f"Best cases (selection B, deliberately favorable): candidates {levels}; level used "
               f"{sel['level_used']}")
         print_bundle_totals(bundle)
-        if not sel["images"]:
+        sel_c = bundle.get("selection_c")  # missing in a bundle exported before selection C was added
+        if sel_c is None and not sel["images"]:
             raise SystemExit("selection B of the bundle is empty: no best-case figure")
-        make_figure(bundle_rows("Real-world", args.realworld, sel, models), args.best_out)
+        rows = bundle_rows("Real-world", args.realworld, sel, models)
+        row_labels = None  # without selection C: one "Real-world" label, as before
+        if sel_c is not None:
+            print(f"Single-object successes (selection C, deliberately favorable): {sel_c['candidates']} candidates "
+                  f"({sel_c['rule']})")
+            rows += bundle_rows("Real-world, one object", args.realworld, sel_c, models)
+            if not rows:
+                raise SystemExit("selections B and C of the bundle are empty: no best-case figure")
+            row_labels = [object_label(len(gt)) for _, _, gt, _ in rows]
+        make_figure(rows, args.best_out, row_labels)
         print("Wrote", args.best_out)
 
 

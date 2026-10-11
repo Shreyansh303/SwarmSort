@@ -13,7 +13,7 @@ predictions are false positives, unmatched ground-truth boxes false negatives. A
 matching, any class) separates "found but mislabeled" from "missed". An image is FULLY CORRECT for a model when it
 has at least one ground-truth box, TP == n_gt and FP == 0. Per-image F1 = 2 TP / (2 TP + FP + FN).
 
-Two fixed selections (no image is chosen by eye):
+Three fixed selections (no image is chosen by eye):
   A  random rows, the rule of r_samples.py (its choose() is called): images with >= 3 ground-truth boxes, sorted by
      file name, put in a random order with random.Random(0).sample, first 2. This is the real-world row of the
      sample figure.
@@ -22,14 +22,19 @@ Two fixed selections (no image is chosen by eye):
      3 models. The candidates of the level used are sorted by file name, put in the seed-0 order as in A, then
      stably sorted by n_gt (most first); the first 3 are taken. The level used and the candidates at every level
      are recorded, with each model's totals over the whole test set, so a caption can state how favorable it is.
+  C  single-object successes, deliberately favorable: images with exactly 1 ground-truth box that are fully correct
+     for all three models, sorted by file name, put in the seed-0 order as in A, first 2. Drawn below B in the
+     best-case figure. The totals also break the fully correct counts down by objects per image (1, 2, >= 3), per
+     model and for all three, so a caption can state how common such images are.
 
 Output folder (--out, recreated):
   per_image_stats.json  every image: source, n_gt and per model n_pred, TP, FP, FN, class-agnostic TP, fully
-                        correct, F1; per-model totals (fully correct images, mean per-image F1).
+                        correct, F1; per-model totals (fully correct images, mean per-image F1) and the fully
+                        correct counts by objects per image.
   selection.json        the settings, rules, level used, totals, and for each selected image its source, statistics
                         and the predicted boxes (normalized x0 y0 x1 y1, class, confidence), so the local figure
                         draws exactly the boxes that were scored.
-  images/, labels/      the selected images (A and B) and their YOLO labels. An image whose long side is above
+  images/, labels/      the selected images (A, B and C) and their YOLO labels. An image whose long side is above
                         --max-side (1280) is downscaled to it (JPEG quality 92) and marked in selection.json; the
                         labels and boxes are normalized, so they still fit.
 and a zip of the folder's contents next to it (realworld_samples.zip), to unzip into paper/figures/data/realworld/.
@@ -62,6 +67,8 @@ LEVELS = [  # selection B: tried in order until at least N_BEST images qualify
     {"level": 2, "min_gt": 2, "min_models_fully_correct": 3},
     {"level": 3, "min_gt": 2, "min_models_fully_correct": 2},
 ]
+N_SINGLE = 2  # selection C
+OBJECT_GROUPS = [("1", 1, 1), ("2", 2, 2), (">=3", 3, None)]  # objects per image: (key, min n_gt, max n_gt)
 OUT_NAMES = {"images", "labels", "selection.json", "per_image_stats.json"}
 JPEG_QUALITY = 92
 ZIP_NAME = "realworld_samples.zip"
@@ -206,6 +213,24 @@ def select_best(paths, stats, arms):
     return ranked[:N_BEST], lv["level"], [{**v, "candidates": len(c)} for v, c in per_level]
 
 
+def select_single(paths, stats, arms):
+    """Selection C. Images with exactly one ground-truth box, fully correct for all the models, in the seeded order
+    of A; the first N_SINGLE. Returns (chosen paths, number of candidates)."""
+    cands = [p for p in paths if stats[p.name]["n_gt"] == 1
+             and all(stats[p.name]["models"][a]["fully_correct"] for a in arms)]
+    return seeded_order(cands)[:N_SINGLE], len(cands)
+
+
+def by_objects(scored, arms):
+    """Fully correct counts by objects per image (OBJECT_GROUPS): images in the group, per model, for all models."""
+    out = {}
+    for key, lo, hi in OBJECT_GROUPS:
+        g = [s for s in scored if s["n_gt"] >= lo and (hi is None or s["n_gt"] <= hi)]
+        out[key] = {"images": len(g), **{a: sum(s["models"][a]["fully_correct"] for s in g) for a in arms},
+                    "all_three": sum(all(s["models"][a]["fully_correct"] for a in arms) for s in g)}
+    return out
+
+
 def export_image(src, dst, max_side):
     """Copy the image unchanged, or downscale it to a long side of max_side. Returns (original size, saved size)."""
     with Image.open(src) as im:
@@ -299,15 +324,19 @@ def main(argv=None):
     totals["fully_correct_all_three"] = sum(k == 3 for k in n_ok)
     totals["fully_correct_at_least_two"] = sum(k >= 2 for k in n_ok)
     totals["fully_correct_none"] = sum(k == 0 for k in n_ok)
+    totals["fully_correct_by_objects"] = by_objects(scored, arms)
 
     sel_a, n_cands_a = rs.choose(paths)
     sel_b, level, levels = select_best(paths, stats, arms)
     if len(sel_b) < N_BEST:
         print(f"WARNING: only {len(sel_b)} images qualify for the best cases even at level {level}", flush=True)
+    sel_c, n_cands_c = select_single(paths, stats, arms)
+    if len(sel_c) < N_SINGLE:
+        print(f"WARNING: only {len(sel_c)} single-object images are fully correct for all three models", flush=True)
 
     prepare_out(out)
     exported = {}
-    for p in dict.fromkeys(sel_a + sel_b):  # A first, no duplicates
+    for p in dict.fromkeys(sel_a + sel_b + sel_c):  # A first, then B, then C, no duplicates
         orig, saved = export_image(p, out / "images" / p.name, args.max_side)
         label = bd.label_path_for(p)
         dst = (out / "labels" / p.name).with_suffix(".txt")
@@ -356,7 +385,17 @@ def main(argv=None):
             "levels": levels, "level_used": level,
             "images": [entry(p, {"models_fully_correct": sum(stats[p.name]["models"][a]["fully_correct"]
                                                              for a in arms)}) for p in sel_b]},
+        "selection_c": {
+            "purpose": "single-object successes; deliberately favorable (state the rule and the fully correct counts "
+                       "by objects per image, totals.fully_correct_by_objects, in the caption)",
+            "rule": f"images with n_gt == 1 that are fully correct for all 3 models, sorted by file name, "
+                    f"random.Random({rs.SEED}).sample order, first {N_SINGLE}",
+            "candidates": n_cands_c,
+            "images": [entry(p, {"seeded_rank": i, "models_fully_correct": len(arms)})
+                       for i, p in enumerate(sel_c)]},
         "overlap_a_b": sorted({p.name for p in sel_a} & {p.name for p in sel_b}),
+        "overlap_a_c": sorted({p.name for p in sel_a} & {p.name for p in sel_c}),
+        "overlap_b_c": sorted({p.name for p in sel_b} & {p.name for p in sel_c}),
         "seconds": round(time.time() - t0, 1),
     }
     (out / "per_image_stats.json").write_text(json.dumps(
@@ -377,7 +416,12 @@ def main(argv=None):
           + f"; used level {level}")
     for p in sel_b:
         print(f"  {p.name} [{sources[p.name][0] or 'source unknown'}] n_gt {stats[p.name]['n_gt']}")
-    down = [n for n, e in exported.items() if e["downscaled"]]
+    print("Fully correct by objects per image: " + "; ".join(
+        f"{k}: {g['images']} images, " + ", ".join(f"{a} {g[a]}" for a in arms) + f", all three {g['all_three']}"
+        for k, g in totals["fully_correct_by_objects"].items()))
+    print(f"Selection C ({n_cands_c} candidates): "
+          + ", ".join(f"{p.name} [{sources[p.name][0] or 'source unknown'}]" for p in sel_c))
+    down =[n for n, e in exported.items() if e["downscaled"]]
     print(f"Exported {len(exported)} images ({len(down)} downscaled to {args.max_side} px) to {out}")
     print(f"Wrote {zip_path} ({zip_path.stat().st_size / 1e6:.2f} MB) in {time.time() - t0:.0f} s")
 
