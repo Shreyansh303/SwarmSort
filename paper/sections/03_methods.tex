@@ -1,2 +1,159 @@
 \section{Materials and Methods}
 \label{sec:methods}
+
+This section describes the experimental design, the data, the detector, the search space, the two search methods, the proxy fitness, the full training and the evaluation protocol. Each choice answers one of the gaps in Section~\ref{subsec:gaps}: a multi-object detector instead of a classifier (G1), a swarm optimizer applied to a detector's training hyperparameters (G2), an equal-budget comparison with random search and the defaults, judged with confidence intervals on a test split used once (G3), and separate studio, real-world and Indian test sets (G4).
+
+\subsection{Experimental Design}
+\label{subsec:design}
+
+The study compares three ways, called arms, of choosing the training hyperparameters of the same detector. \armA trains with the Ultralytics default values of the six searched hyperparameters and performs no search. \armB trains with the best of 32 random samples from the search space. \armC trains with the best setting found by a particle swarm of 8 particles over 4 rounds, again 32 evaluations. Both search arms score every candidate with the same short proxy training (Section~\ref{subsec:proxy}), so the budget is counted in proxy trainings, 32 per arm, not in wall-clock time, which varied between methods and cloud sessions (Section~\ref{subsec:res-cost}). Arm~A has no search cost: it is the reference that any tuning must beat. The chosen setting of each arm is then trained once at full length with an identical recipe (Section~\ref{subsec:training}) and scored once on a held-out test split with paired-bootstrap confidence intervals (Section~\ref{subsec:eval}), as summarized in Fig.~\ref{fig:pipeline}.
+
+The experiment was run twice. \genone uses one studio-style dataset with six classes at 416~px. \gentwo adds real-world training photographs, a seventh class (OTHER), 640~px images and a test-only Indian set. The search space, PSO settings, seeds, recipes and evaluation code are the same in both generations, and both searches were rerun from scratch. Because the seeds were kept, the \gentwo random search evaluated the same 32 configurations as in \genone and the swarm started from the same positions; only the fitness values differ. Since classes, image size and training data differ, the two generations' scores are not one benchmark; a dedicated comparison is described in Section~\ref{subsec:eval}.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{m_pipeline.png}
+\caption{Experimental pipeline shared by both generations. Arms~B and~C each spend 32 proxy trainings; Arm~A uses the library defaults without search. Each arm's chosen setting is trained once for 100 epochs and tested once. \gentwo adds real-world training data, the OTHER class, 640~px images and a test-only Indian set (DWSD).}
+\label{fig:pipeline}
+\end{figure}
+
+\subsection{Datasets}
+\label{subsec:datasets}
+
+Table~\ref{tab:datasets} lists every data source with its licence and split sizes.
+
+\textit{\genone data.} \genone uses the Kaggle dataset ``Garbage Detection -- 6 Waste Categories''~\cite{viswaprakash2024garbage} (CC BY 4.0, from a Roboflow project): 10,464 studio-style images of $416\times416$ pixels with YOLO-format boxes in six classes, BIODEGRADABLE, CARDBOARD, GLASS, METAL, PAPER and PLASTIC. The training split has 51,756 boxes on 7,324 images, and 36.45\% of all boxes cover less than 1\% of the image. BIODEGRADABLE holds 61.92\% of the training boxes and PAPER, the smallest class, 5.61\%.
+
+The dataset's own folders were rejected because they are split by class: the provided validation folder holds 13,632 BIODEGRADABLE boxes but only 33 PAPER boxes, and the provided test folder no GLASS box at all. We pooled all images and re-split them 70/20/10, stratified by source class, with seed 42, which gives 7,324 training, 2,094 validation and 1,046 test images with at least 30 boxes of every class in validation and test. Near-duplicates were kept in one split. Two images counted as copies if their files were identical (MD5), if they came from the same Roboflow source image, if their 256-bit difference hashes (dHash) differed by at most 10 bits, or if the hashes differed by at most 40 bits and their $64\times64$ grayscale thumbnails had a Pearson correlation of at least 0.90. This found 47 groups with 133 images, each assigned to a single split, so no copy crosses splits under any rule. The label checks found 17 zero-size boxes and no corrupt or unlabeled image.
+
+\textit{\gentwo training data.} \gentwo merges three sources into seven classes: the six \genone classes, with unchanged indices, plus OTHER for items that fit none of them. The \genone data keep their split; a subsample stratified by dominant class (seed 42) keeps 3,000 training and 900 validation images, and all 1,046 test images are kept, so the \gentwo studio test set is exactly the \genone test set. TACO~\cite{proenca2020taco} contributes 1,500 crowd-sourced photographs of litter in the wild. All 60 TACO categories were mapped to the seven classes, none dropped (for example, drink cans became METAL and cigarettes OTHER), giving 4,784 boxes, including 1,260 OTHER and only 8 BIODEGRADABLE. The HITL Recycling dataset~\cite{hitl2026recycling} (Humans in the Loop, CC0) contributes 3,201 street and pavement photographs, almost all with a single litter box (3,206 boxes). Its class comes from the object tag where that tag is decisive (for example, food waste $\to$ BIODEGRADABLE) and otherwise from the material tag (for example, aluminum $\to$ METAL); objects with neither became OTHER, and the build flagged 100 objects without a material tag.
+
+TACO and HITL were split 70/20/10 with the same duplicate-aware procedure, and all images were stored with a long side of at most 640~px. On the merged data, the duplicate rules found 962 groups, none spanning two sources or two splits; they include 918 byte-identical pairs inside the real-world sources, which cause no leakage but give some photographs extra weight in training. The merged set has 6,292 training, 1,841 validation and 1,514 test images; the test split divides into a studio set of 1,046 images (7,413 boxes) and a real-world set of 468 images (779 boxes). BIODEGRADABLE holds 51.96\% of the training boxes and OTHER 3.89\%; the studio images contain no OTHER box, and the real-world test set a single BIODEGRADABLE box.
+
+\textit{Indian test set.} The Dense Waste Segmentation Dataset (DWSD)~\cite{ali2025dwsd} contains 784 phone photographs of streets, parks and garbage areas in Kolkata and Berhampore, West Bengal, India, annotated as $448\times448$ semantic masks in which each grey level is a waste class. We used DWSD only for testing, never for training, search or model selection. Each 8-connected region of one mask value became one box, and regions under 50 mask pixels were dropped, so touching items of the same class merge into one large box and DWSD has fewer and larger boxes than a per-item annotation would have. The class mapping also had to be inferred: the published table of mask values matches the masks' pixel counts but not what the regions show (for example, the value listed as background covers polythene bags in 610 of the 784 masks). We named each value by inspecting its regions and mapped the names to our classes; six of the fifteen values remain uncertain. The 84 images without any box were excluded, because some show unannotated waste. The India test set thus has 700 images and 4,502 boxes: 3,040 PLASTIC, 1,230 PAPER, 124 CARDBOARD, 90 OTHER and 18 METAL. It was built separately with the same configuration, seed and size limit as the main build, and an MD5 cross-check against the 9,647 main-build images found no identical file.
+
+\begin{table*}[!t]
+\centering
+\caption{Datasets. Counts are images, with boxes in parentheses. ``Classes'' is the number of target classes that occur in the source. The \gentwo studio test set equals the \genone test set; the \gentwo real-world test set is the union of the TACO and HITL test images (468 images, 779 boxes).}
+\label{tab:datasets}
+\footnotesize
+\begin{tabular}{@{}llllllccc@{}}
+\toprule
+Generation & Source & Domain & Licence & Stored size & Classes & Train & Validation & Test \\
+\midrule
+\genone & Garbage Detection (Kaggle) & studio & CC BY 4.0 & $416\times416$ & 6 & 7,324 (51,756) & 2,094 (14,904) & 1,046 (7,413) \\
+\midrule
+\multirow{5}{*}{\gentwo} & \genone subsample & studio & CC BY 4.0 & $416\times416$ & 6 & 3,000 (22,206) & 900 (6,904) & 1,046 (7,413) \\
+ & TACO~\cite{proenca2020taco} & real-world & CC BY 4.0 & long side $\le 640$ & 7 & 1,050 (3,293) & 301 (1,031) & 149 (460) \\
+ & HITL Recycling & real-world & CC0 & long side $\le 640$ & 7 & 2,242 (2,246) & 640 (641) & 319 (319) \\
+ & Total (7 classes) & mixed & & & 7 & 6,292 (27,745) & 1,841 (8,576) & 1,514 (8,192) \\
+ & DWSD~\cite{ali2025dwsd} & India & CC BY 4.0 & $448\times448$ & 5 & -- & -- & 700 (4,502) \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Detector}
+\label{subsec:detector}
+
+All arms train YOLOv8n, the nano variant of the YOLOv8 family of single-stage detectors~\cite{redmon2016you,jocher2023ultralytics}, which predicts boxes and classes in one pass over the image. We used the Ultralytics implementation, pinned to version 8.4.169 for every run, and initialized every training from the COCO-pretrained \texttt{yolov8n.pt} weights~\cite{lin2014microsoft}; the library replaces the class outputs of the detection head to match our six or seven classes. A nano model was chosen because the intended use is a smart bin or a phone, where compute and power are limited, and because it keeps 32 proxy trainings per arm affordable on a single cloud GPU. Its latency is measured in the evaluation (Section~\ref{subsec:eval}).
+
+\subsection{Search Space}
+\label{subsec:space}
+
+Both search arms explore the same six-dimensional space in both generations (Table~\ref{tab:space}). Three dimensions control optimization: \texttt{lr0}, the initial learning rate; \texttt{lrf}, the final learning rate as a fraction of \texttt{lr0}; and the SGD \texttt{momentum}. The fourth, \texttt{weight\_decay}, controls regularization, and the last two control augmentation: \texttt{mosaic}, the probability of mosaic augmentation, and \texttt{scale}, the gain of random image rescaling. The learning rate and the weight decay are searched on a $\log_{10}$ scale because their plausible values span two orders of magnitude. Both optimizers work in ``search units'': a log-scaled dimension holds the base-10 exponent (a particle at $-3.2$ means $\texttt{lr0}=10^{-3.2}$), giving bounds of $[-4,-2]$ for \texttt{lr0} and $[-5,-3]$ for \texttt{weight\_decay}, and a linear dimension holds the value itself. Decoded values are rounded to six significant digits.
+
+Arm~A uses the Ultralytics defaults for these six values. Three of them lie on the boundary of the searched ranges: the default \texttt{lrf} of 0.01 sits on the lower bound, and the defaults of \texttt{lr0} (0.01) and \texttt{mosaic} (1.0) sit on the upper bounds, so the searches can reach them only at the edge of the space. Every other training hyperparameter (color augmentation, translation, flips, loss gains and so on) was left at the library default and is identical across arms.
+
+\begin{table}[!t]
+\centering
+\caption{Search Space and Search Settings (Shared by Both Generations)}
+\label{tab:space}
+\footnotesize
+\begin{tabular}{@{}p{0.27\columnwidth}lll@{}}
+\toprule
+Hyperparameter & Range & Scale & Default (Arm~A) \\
+\midrule
+\texttt{lr0} & $10^{-4}$ to $10^{-2}$ & $\log_{10}$ & 0.01 \\
+\texttt{lrf} & 0.01 to 0.2 & linear & 0.01 \\
+\texttt{momentum} & 0.60 to 0.98 & linear & 0.937 \\
+\texttt{weight\_decay} & $10^{-5}$ to $10^{-3}$ & $\log_{10}$ & 0.0005 \\
+\texttt{mosaic} & 0.0 to 1.0 & linear & 1.0 \\
+\texttt{scale} & 0.2 to 0.8 & linear & 0.5 \\
+\midrule
+Setting & \multicolumn{3}{l@{}}{Value} \\
+\midrule
+PSO budget & \multicolumn{3}{p{0.63\columnwidth}@{}}{8 particles $\times$ 4 rounds $=$ 32 evaluations} \\
+Inertia $w_t$ & \multicolumn{3}{p{0.63\columnwidth}@{}}{0.9, 0.65, 0.4 (linear over 3 update steps)} \\
+$c_1$, $c_2$ & \multicolumn{3}{p{0.63\columnwidth}@{}}{1.5, 1.5} \\
+$\mathbf{r}_1$, $\mathbf{r}_2$ & \multicolumn{3}{p{0.63\columnwidth}@{}}{$U(0,1)$, fresh per particle and dimension} \\
+Velocity limit & \multicolumn{3}{p{0.63\columnwidth}@{}}{$\pm20\%$ of each range} \\
+Initialization & \multicolumn{3}{p{0.63\columnwidth}@{}}{positions uniform in bounds; velocities uniform in $\pm10\%$ of each range} \\
+Boundaries & \multicolumn{3}{p{0.63\columnwidth}@{}}{position clipped; velocity of a clipped dimension set to 0} \\
+PSO seed & \multicolumn{3}{p{0.63\columnwidth}@{}}{42} \\
+Random search & \multicolumn{3}{p{0.63\columnwidth}@{}}{32 i.i.d.\ uniform samples in search units; seed 123} \\
+Fitness & \multicolumn{3}{p{0.63\columnwidth}@{}}{validation \mapfifty after a 12-epoch proxy training on a stratified 40\% training subset} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Particle Swarm Optimization}
+\label{subsec:pso}
+
+Arm~C uses a standard global-best particle swarm optimizer~\cite{kennedy1995particle} with an inertia weight~\cite{shi1998modified}, written by hand in NumPy, that maximizes the proxy fitness. Each particle $i$ has a position $\mathbf{x}_i \in \mathbb{R}^6$ in search units, a velocity $\mathbf{v}_i$ and the best position it has visited, $\mathbf{p}_i$; $\mathbf{g}$ is the best position visited by any particle. One update step is
+\begin{equation}
+\mathbf{v}_i \leftarrow w_t\,\mathbf{v}_i + c_1\,\mathbf{r}_1 \odot (\mathbf{p}_i - \mathbf{x}_i) + c_2\,\mathbf{r}_2 \odot (\mathbf{g} - \mathbf{x}_i),
+\label{eq:velocity}
+\end{equation}
+after which every component $v_{i,d}$ is clamped to $[-v_{\max,d},\, v_{\max,d}]$ with $v_{\max,d} = 0.2\,(u_d - l_d)$, where $l_d$ and $u_d$ are the bounds of dimension $d$, and then
+\begin{equation}
+\mathbf{x}_i \leftarrow \min\bigl(\max(\mathbf{x}_i + \mathbf{v}_i,\ \mathbf{l}),\ \mathbf{u}\bigr),
+\label{eq:position}
+\end{equation}
+taken element-wise. A dimension clipped to its bound has its velocity set to zero, so the particle rests at the wall instead of pushing further out. In~\eqref{eq:velocity}, $\odot$ is the element-wise product, $c_1 = c_2 = 1.5$, and the entries of $\mathbf{r}_1$ and $\mathbf{r}_2$ are drawn fresh from $U(0,1)$ for every particle, dimension and step.
+
+The search runs for $T = 4$ rounds of 8 particles. Round~1 evaluates the random initial swarm, and each of the $T-1 = 3$ update steps is followed by one more round; the swarm does not move after the last round, so the budget is exactly 32 evaluations. The inertia weight falls linearly over the update steps,
+\begin{equation}
+w_t = w_{\mathrm{start}} - (w_{\mathrm{start}} - w_{\mathrm{end}})\,\frac{t-1}{T-2}, \qquad t = 1, \dots, T-1,
+\label{eq:inertia}
+\end{equation}
+with $w_{\mathrm{start}} = 0.9$ and $w_{\mathrm{end}} = 0.4$, which gives 0.9, 0.65 and 0.4. The inertia weight is the concept of~\cite{shi1998modified}; this linear schedule is our setting, chosen so that the swarm explores first and refines later.
+
+Initial positions are drawn uniformly within the bounds, and initial velocities uniformly within $\pm10\%$ of each range. A personal best is replaced only by a strictly higher fitness. All randomness comes from one NumPy generator seeded with 42, so an interrupted search resumes exactly by replaying the seed and reusing the logged fitness values. A failed training (non-finite \mapfifty) would be recorded with fitness 0, the lowest possible value, and excluded from selection; none occurred in any of the four searches.
+
+As a code check, we ran the optimizer on the Sphere and Rastrigin functions on $[-5.12, 5.12]^6$, both with a global minimum of 0. With 20 particles, 50 rounds and 10 seeds, the median best value was $1.9\times10^{-5}$ for Sphere and 6.96 for the multimodal Rastrigin function: the optimizer converges on a smooth bowl and keeps improving among many local minima. This check makes no claim about tuning performance.
+
+\subsection{Random Search and Defaults}
+\label{subsec:random}
+
+Arm~B draws 32 points independently and uniformly in search units, which makes the learning rate and the weight decay log-uniform and the other four uniform, with seed 123, and evaluates them with the same proxy and search script as the swarm. Random search~\cite{bergstra2012random} is included because any structured optimizer should be judged against it at the same budget. For both search arms, the winner is the evaluation with the highest proxy fitness among the 32 (the first one in case of a tie). Arm~A simply uses the six default values listed in Table~\ref{tab:space}.
+
+\subsection{Proxy Fitness and Its Validation}
+\label{subsec:proxy}
+
+A full training takes more than an hour on our GPU, so the searches score candidates with a short proxy training: 12 epochs on a stratified 40\% subset of the training split. In \genone, the subset holds 2,930 of the 7,324 images, stratified by source class; in \gentwo, it holds 40\% of the 6,292 images, stratified by source and dominant class. The subset is drawn once with seed 42 and written to an explicit image list, so every candidate trains on exactly the same images on every machine. The fitness is the \mapfifty of the last-epoch weights on the full validation split. The proxy uses each generation's image size and the full-training recipe (Section~\ref{subsec:training}), except that the period without mosaic and the warm-up keep the same share of the run, 10\% and 3\% of the epochs: \texttt{close\_mosaic} is 1 epoch and the warm-up 0.36 epochs. Because \texttt{mosaic} is a searched hyperparameter, this keeps the proxy faithful to the full run.
+
+Before the \genone searches, we tested whether the proxy ranks settings in the same order as a longer training. Seven configurations were drawn by Latin hypercube sampling~\cite{mckay1979comparison} in search units (SciPy's sampler with ``random-cd'' optimization, seed 42), and the default setting was added. Each of the eight was trained twice: with the proxy and with a ``medium'' run of 40 epochs on the full training split (\texttt{close\_mosaic} 4, warm-up 1.2 epochs), both at 416~px. The statistic was the Spearman rank correlation~\cite{spearman1904proof} between the eight proxy scores and the eight medium scores. The pass threshold, $\rho \ge 0.6$, and the fallback, a 20-epoch proxy, were fixed before the runs. The result is reported in Section~\ref{subsec:res-proxy}.
+
+The check was not repeated for \gentwo; the decision, recorded before its searches, relied on the \genone result and the unchanged recipe. Since data, classes and image size changed, proxy validity in \gentwo is assumed rather than tested. The check itself has three further limits: it uses only eight configurations, its reference is 40 epochs rather than 100, and the proxy scores last-epoch weights while the final models are selected as \texttt{best.pt} (Section~\ref{subsec:limitations}).
+
+\subsection{Full Training}
+\label{subsec:training}
+
+Each arm's chosen setting was trained once from the COCO-pretrained weights for 100 epochs on the full training split of its generation, with an identical recipe for the three arms. The optimizer was set to SGD explicitly, because the library's default \texttt{optimizer=auto} would ignore the searched \texttt{lr0} and \texttt{momentum}; every run records the optimizer and initial learning rate it actually used. The batch size was 16, the warm-up 3 epochs, and mosaic augmentation was switched off for the last 10 epochs. The image size was 416~px in \genone and 640~px in \gentwo. Validation ran after every epoch, and the checkpoint with the best validation fitness (\texttt{best.pt}) is the model that was tested. All other arguments kept their library defaults.
+
+Every run used seed 42 with the library's deterministic mode. Ultralytics lazily imports a module during the first training of a process, after seeding, and this import draws random numbers, so the first run of a process differed from later runs with the same seed; importing the module before seeding removed the difference. All trainings ran on a single NVIDIA Tesla T4 GPU on Kaggle, with one training seed per arm, so run-to-run variance is not measured (Section~\ref{subsec:limitations}).
+
+Two \gentwo runs froze, most likely because the cloud session's input-data mount stopped responding. The \gentwo Arm~C training was resumed from its checkpoint after epoch 55, after checking that every saved training argument matched the planned ones; a resumed run continues the same weights, optimizer state and epoch counter but is not bit-identical to an uninterrupted run. The \gentwo random search stopped after 11 of its 32 evaluations and was continued by replaying its log, so no completed evaluation was affected.
+
+\subsection{Evaluation Protocol}
+\label{subsec:eval}
+
+The test split of each generation was scored once, after all training had finished; any trial evaluation used the validation split instead. In \gentwo, one evaluation run scored the three models on the whole test split (``all'', 1,514 images) and separately on the studio (1,046), real-world (468) and India (700) test sets. Before scoring, each checkpoint had to match its arm's record (class names, epochs, image size and the six hyperparameters).
+
+The metrics come from the Ultralytics detection validator at each model's training image size, with batches of 32, rectangular batching, a confidence threshold of 0.001, an NMS IoU threshold of 0.7 and 32-bit floating point. We report \mapfifty, \mapfiftyninetyfive (averaged over IoU thresholds from 0.50 to 0.95 in steps of 0.05), precision and recall at the maximum-F1 confidence, and per-class AP@50. As a consistency check, both mAP values were recomputed from the stored per-image statistics and had to match the validator within $10^{-4}$; they agreed exactly for every model and test set.
+
+Uncertainty was estimated with a paired image bootstrap~\cite{efron1993introduction}: the test images were resampled with replacement 1,000 times (seed 0), with the same resampled indices for every model, and both mAP values were recomputed for each resample. We report 95\% percentile confidence intervals for each model and each pairwise difference; a difference counts as significant only if its interval excludes 0. Each \gentwo test set has its own bootstrap. No $p$-values or multiple-comparison corrections were computed, per-class AP has no interval, and the intervals cover test-image sampling only, not the randomness of training or search.
+
+A comparison of \genone and \gentwo models on the same test images is restricted to the six shared classes: OTHER labels are removed, \gentwo predictions of OTHER are dropped during non-maximum suppression, each model runs at its own training image size, and the best arm of each generation is chosen by its validation score. Its results are \textbf{[PENDING: Gen~1 vs Gen~2 comparison]}.
+
+Inference speed is the median batch-1 latency over 100 test images after 10 warm-up predictions (confidence threshold 0.25) at each model's training image size. The \genone models were timed on a laptop CPU (Intel Core Ultra~5 125H) and the \gentwo models on the Tesla T4 GPU, so latencies are comparable only within a generation.
